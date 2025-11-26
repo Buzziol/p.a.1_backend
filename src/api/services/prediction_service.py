@@ -16,6 +16,8 @@ from ..utils.exceptions import (
 )
 from ..utils.logger import APILogger
 
+from tensorflow.keras.applications.resnet50 import preprocess_input
+
 
 class PredictionService:
     """Serviço de predição de câncer de pele."""
@@ -78,9 +80,7 @@ class PredictionService:
             image = image.resize(self.config.IMG_SIZE)
 
             img_array = np.array(image, dtype=np.float32)
-
-            img_array = img_array / 255.0
-
+            img_array = preprocess_input(img_array)
             img_array = np.expand_dims(img_array, axis=0)
 
             self.logger.info(f"Imagem preprocessada: shape={img_array.shape}")
