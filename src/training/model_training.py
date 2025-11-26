@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from typing import Tuple, Dict, Any
 
+import keras_tuner as kt
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -17,11 +18,10 @@ from sklearn.utils import resample
 from tensorflow import keras
 from tensorflow.keras import layers, regularizers
 from tensorflow.keras.applications.resnet50 import ResNet50
+from tensorflow.keras.applications.resnet50 import preprocess_input
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-
-import keras_tuner as kt
 
 from model_ensemble import ModelEnsembleManager
 
@@ -148,7 +148,6 @@ class DataManager:
         df_benign = df[df['label'] == 'benign'].copy()
         df_malignant = df[df['label'] == 'malignant'].copy()
 
-        # Estratégia: Razão 2:1.5 (benign:malignant)
         target_benign = min(len(df_benign), int(len(df_malignant) * 2))
         target_malignant = int(len(df_malignant) * 1.5)
 
@@ -189,17 +188,16 @@ class DataManager:
         """Cria os geradores de dados com data augmentation."""
 
         train_datagen = ImageDataGenerator(
-            rescale=1./255,
-            rotation_range=20,
-            width_shift_range=0.15,
-            height_shift_range=0.15,
-            zoom_range=0.15,
+            preprocessing_function=preprocess_input, # ANOTAÇÃO : Antes era: rescale=1./255
+            rotation_range=15,
+            width_shift_range=0.1,
+            height_shift_range=0.1,
+            zoom_range=0.1,
             horizontal_flip=True,
-            vertical_flip=True,
             fill_mode='nearest'
         )
 
-        val_datagen = ImageDataGenerator(rescale=1./255)
+        val_datagen = ImageDataGenerator(preprocessing_function=preprocess_input) # ANOTAÇÃO : Antes era: rescale=1./255
 
         train_gen = train_datagen.flow_from_dataframe(
             train_df,
@@ -208,9 +206,11 @@ class DataManager:
             target_size=self.config.IMG_SIZE,
             batch_size=self.config.BATCH_SIZE,
             class_mode='binary',
-            classes=['benign', 'malignant'], # --> Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
+            classes=['benign', 'malignant'], # Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
             shuffle=True,                    # e será vista como "POSITIVE" na matriz de confusão e métricas derivadas.
-            seed=self.config.RANDOM_SEED
+            seed=self.config.RANDOM_SEED,
+            workers=4, # ANOTAÇÃO : Adicionei paralelismo para acelerar o carregamento
+            use_multiprocessing=True # ANOTAÇÃO : Adicionei paralelismo para acelerar o carregamento
         )
 
         val_gen = val_datagen.flow_from_dataframe(
@@ -220,9 +220,11 @@ class DataManager:
             target_size=self.config.IMG_SIZE,
             batch_size=self.config.BATCH_SIZE,
             class_mode='binary',
-            classes=['benign', 'malignant'], # --> Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
+            classes=['benign', 'malignant'], # Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
             shuffle=False,                   # e será vista como "POSITIVE" na matriz de confusão e métricas derivadas.
-            seed=self.config.RANDOM_SEED
+            seed=self.config.RANDOM_SEED,
+            workers=4, # ANOTAÇÃO : Adicionei paralelismo para acelerar o carregamento
+            use_multiprocessing=True # ANOTAÇÃO : Adicionei paralelismo para acelerar o carregamento
         )
 
         return train_gen, val_gen
@@ -396,7 +398,7 @@ class HyperparameterTuner:
 
         tuner = kt.BayesianOptimization(
             hypermodel,
-            objective=kt.Objective('val_recall', direction='max'),  # Se não funcionar, próxima etapa é voltar aqui para 'val_auc'
+            objective=kt.Objective('val_auc', direction='max'),
             max_trials=self.config.MAX_TRIALS,
             executions_per_trial=self.config.EXECUTIONS_PER_TRIAL,
             directory=self.config.TUNER_DIR,
@@ -412,16 +414,18 @@ class HyperparameterTuner:
 
         callbacks = [
             EarlyStopping(
-                monitor='val_recall', # Depois tentar mudar para 'val_auc' se não funcionar
+                monitor='val_auc',
                 patience=5,
                 restore_best_weights=True,
-                mode='max'
+                mode='max',
+                verbose=1
             ),
             ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
                 patience=3,
-                min_lr=1e-7
+                min_lr=1e-7,
+                verbose=1
             )
         ]
 
@@ -537,92 +541,104 @@ class CrossValidationManager:
             data_manager = DataManager(self.config, self.logger)
             train_gen, val_gen = data_manager.create_data_generators(train_df, val_df)
 
-            class_weight = model_builder.calculate_class_weights(train_gen)
-
-            if hyperparameters:
-                model, base_model = model_builder.build_model(
-                    dropout_rate=hyperparameters['dropout_rate'],
-                    dense_units=hyperparameters['dense_units'],
-                    l2_reg=hyperparameters['l2_reg'],
-                    learning_rate=hyperparameters['learning_rate']
-                )
-            else:
-                model, base_model = model_builder.build_model()
-
             fold_model_path = os.path.join(
                 self.config.MODELS_DIR,
                 f'fold_{fold}_best_model.keras'
             )
 
-            callbacks = [
-                EarlyStopping(
-                    monitor='val_recall', # Se não funcionar, mudar para 'val_auc'
-                    patience=15,
-                    restore_best_weights=True,
-                    mode='max',
-                    verbose=1
-                ),
-                ReduceLROnPlateau(
-                    monitor='val_loss',
-                    factor=0.5,
-                    patience=5,
-                    min_lr=1e-7,
-                    verbose=1
-                ),
-                ModelCheckpoint(
-                    fold_model_path,
-                    monitor='val_recall', # Se não funcionar, mudar para 'val_auc'
-                    mode='max',
-                    save_best_only=True,
-                    verbose=1
-                )
-            ]
+            if os.path.exists(fold_model_path):
+                self.logger.info(f"  Modelo do Fold {fold} já existe: {fold_model_path}")
+                self.logger.info(f"  Pulando treinamento, carregando modelo existente...")
+            else:
+                self.logger.info(f"  Modelo do Fold {fold} não encontrado. Iniciando treinamento...")
 
-            # Treinar - Fase 1: Transfer Learning
-            self.logger.info("\n Fase 1: Transfer Learning")
-            history1 = model.fit(
-                train_gen,
-                validation_data=val_gen,
-                epochs=min(self.config.EPOCHS, self.config.FINE_TUNE_AT),
-                callbacks=callbacks,
-                class_weight=class_weight,
-                verbose=1
-            )
+                class_weight = model_builder.calculate_class_weights(train_gen)
 
-            # Fase 2: Fine-tuning (se necessário)
-            if self.config.EPOCHS > self.config.FINE_TUNE_AT:
-                self.logger.info("\n Fase 2: Fine-Tuning")
+                if hyperparameters:
+                    model, base_model = model_builder.build_model(
+                        dropout_rate=hyperparameters['dropout_rate'],
+                        dense_units=hyperparameters['dense_units'],
+                        l2_reg=hyperparameters['l2_reg'],
+                        learning_rate=hyperparameters['learning_rate']
+                    )
+                else:
+                    model, base_model = model_builder.build_model()
 
-                base_model.trainable = True
-                for layer in base_model.layers[:-self.config.FINE_TUNE_LAYERS]:
-                    layer.trainable = False
+                callbacks = [
+                    EarlyStopping(
+                        monitor='val_auc',
+                        patience=15,
+                        restore_best_weights=True,
+                        mode='max',
+                        verbose=1
+                    ),
+                    ReduceLROnPlateau(
+                        monitor='val_loss',
+                        factor=0.5,
+                        patience=5,
+                        min_lr=1e-7,
+                        verbose=1
+                    ),
+                    ModelCheckpoint(
+                        fold_model_path,
+                        monitor='val_auc',
+                        mode='max',
+                        save_best_only=True,
+                        verbose=1
+                    )
+                ]
 
-                model.compile(
-                    optimizer=Adam(learning_rate=1e-5),
-                    loss='binary_crossentropy',
-                    metrics=[
-                        'accuracy',
-                        keras.metrics.AUC(name='auc'),
-                        keras.metrics.Precision(name='precision'),
-                        keras.metrics.Recall(name='recall')
-                    ]
-                )
-
-                history2 = model.fit(
+                # Treinar - Fase 1: Transfer Learning
+                self.logger.info("\n Fase 1: Transfer Learning")
+                history1 = model.fit(
                     train_gen,
                     validation_data=val_gen,
-                    epochs=self.config.EPOCHS,
-                    initial_epoch=len(history1.history['loss']),
+                    epochs=min(self.config.EPOCHS, self.config.FINE_TUNE_AT),
                     callbacks=callbacks,
                     class_weight=class_weight,
                     verbose=1
                 )
 
+                # Fase 2: Fine-tuning (se necessário)
+                if self.config.EPOCHS > self.config.FINE_TUNE_AT:
+                    self.logger.info("\n Fase 2: Fine-Tuning")
+
+                    base_model.trainable = True
+                    for layer in base_model.layers[:-self.config.FINE_TUNE_LAYERS]:
+                        layer.trainable = False
+
+                    model.compile(
+                        optimizer=Adam(learning_rate=1e-5),
+                        loss='binary_crossentropy',
+                        metrics=[
+                            'accuracy',
+                            keras.metrics.AUC(name='auc'),
+                            keras.metrics.Precision(name='precision'),
+                            keras.metrics.Recall(name='recall')
+                        ]
+                    )
+
+                    history2 = model.fit(
+                        train_gen,
+                        validation_data=val_gen,
+                        epochs=self.config.EPOCHS,
+                        initial_epoch=len(history1.history['loss']),
+                        callbacks=callbacks,
+                        class_weight=class_weight,
+                        verbose=1
+                    )
+
             self.logger.info(f"\n Avaliando Fold {fold}...")
             best_model = keras.models.load_model(fold_model_path)
+
             y_pred_proba = best_model.predict(val_gen, verbose=0)
-            y_pred = (y_pred_proba.ravel() >= 0.5).astype(int)
-            y_true = val_gen.classes
+            y_pred_proba_flat = y_pred_proba.ravel()
+
+            y_pred = (y_pred_proba_flat >= 0.5).astype(int)
+
+            y_true = np.array(val_gen.classes).astype(int)
+
+            self.print_predictions_analysis(y_pred_proba, y_true, y_pred)
 
             cm = confusion_matrix(y_true, y_pred)
             tn, fp, fn, tp = cm.ravel()
@@ -632,7 +648,7 @@ class CrossValidationManager:
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
             precision = tp / (tp + fp) if (tp + fp) > 0 else 0
             recall = sensitivity
-            auc_score = roc_auc_score(y_true, y_pred_proba.ravel())
+            auc_score = roc_auc_score(y_true, y_pred_proba_flat)
 
             fold_metrics['accuracy'].append(accuracy)
             fold_metrics['auc'].append(auc_score)
@@ -691,6 +707,36 @@ class CrossValidationManager:
 
         return aggregated_results
 
+    @staticmethod
+    def print_predictions_analysis(y_pred_proba, y_true, y_pred) -> None:
+        """Imprime análise detalhada das predições."""
+
+        y_true = np.array(y_true)
+        y_pred = np.array(y_pred)
+        y_pred_proba = np.array(y_pred_proba)
+
+        print("=" * 60)
+        print("ANÁLISE DAS PREDIÇÕES")
+        print("=" * 60)
+        print(f"Shape das predições: {y_pred_proba.shape}")
+        print(f"\nDistribuição das probabilidades:")
+        print(f"  Mínimo:  {y_pred_proba.min():.4f}")
+        print(f"  Máximo:  {y_pred_proba.max():.4f}")
+        print(f"  Média:   {y_pred_proba.mean():.4f}")
+        print(f"  Mediana: {np.median(y_pred_proba):.4f}")
+
+        print(f"\nQuantas predições > 0.5: {(y_pred_proba.ravel() > 0.5).sum()} / {len(y_pred_proba)}")
+        print(f"Quantas predições > 0.7: {(y_pred_proba.ravel() > 0.7).sum()} / {len(y_pred_proba)}")
+        print(f"Quantas predições > 0.9: {(y_pred_proba.ravel() > 0.9).sum()} / {len(y_pred_proba)}")
+
+        print(f"\nDistribuição das classes reais:")
+        print(f"  Benign (0):    {(y_true == 0).sum()}")
+        print(f"  Malignant (1): {(y_true == 1).sum()}")
+
+        print(f"\nDistribuição das predições:")
+        print(f"  Predito Benign (0):    {(y_pred == 0).sum()}")
+        print(f"  Predito Malignant (1): {(y_pred == 1).sum()}")
+        print("=" * 60)
 
 # ============================================================================
 # VISUALIZATION MANAGER
@@ -835,20 +881,20 @@ class SkinCancerPipeline:
 # ============================================================================
 
 if __name__ == "__main__":
-    # Configurar seeds para reprodutibilidade
     np.random.seed(Config.RANDOM_SEED)
     tf.random.set_seed(Config.RANDOM_SEED)
 
-    # Criar e executar pipeline
     pipeline = SkinCancerPipeline(Config)
 
-    # Executar com Tuner e Cross-Validation
-    # Para desabilitar algum, use: use_tuner=False ou use_cv=False
+    '''
+    Para rodar pipeline completa
+    '''
+    pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=True, create_ensemble=True)
 
-    # Para rodar pipeline completa
-    pipeline.run(use_tuner=True, use_cv=True)
-
-    # Para usar os melhores hiperparâmetros já encontrados e salvar um modelo final de ensemble (junção dos modelos dos folds)
+    '''
+    Para usar os melhores hiperparâmetros já encontrados e salvar um modelo final de ensemble (junção dos modelos dos folds)
+    '''
     # pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False, create_ensemble=True)
 
-    # pipeline.run(use_tuner=False, use_cv=False, search_hyperparameters=False, create_ensemble=True)
+    # CTRL + F "ANOTAÇÃO" para ver as modificações feitas.
+

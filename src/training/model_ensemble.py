@@ -61,6 +61,9 @@ class ModelEnsembleManager:
 
         predictions = []
         for i, model in enumerate(fold_models):
+            model._name = f'fold_{i + 1}_model'
+            if hasattr(model, 'name'):
+                model.name = f'fold_{i + 1}_model'
             for layer in model.layers:
                 layer.trainable = False
                 layer._name = f'fold_{i + 1}_{layer.name}'
@@ -101,7 +104,7 @@ class ModelEnsembleManager:
 
         self.logger.info(f"\nSalvando modelo ensemble final...")
         ensemble_model.save(save_path)
-        self.logger.info(f"✓ Modelo salvo em: {save_path}")
+        self.logger.info(f"Modelo salvo em: {save_path}")
 
         ensemble_info = {
             'n_models': self.config.N_FOLDS,
@@ -168,7 +171,7 @@ class ModelEnsembleManager:
             dummy_input = np.random.rand(1, *self.config.IMG_SIZE, 3).astype(np.float32)
             prediction = model.predict(dummy_input, verbose=0)
 
-            self.logger.info(f"✓ Teste de predição bem-sucedido")
+            self.logger.info(f"Teste de predição bem-sucedido")
             self.logger.info(f"   - Formato de saída: {prediction.shape}")
             self.logger.info(f"   - Valor da predição: {prediction[0][0]:.4f}")
 

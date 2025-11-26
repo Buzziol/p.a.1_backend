@@ -1,0 +1,10 @@
+{
+    "n_models": 5,
+    "strategy": "averaging",
+    "input_shape": [
+        224,
+        224,
+        3
+    ],
+    "model_path": "src\\models\\final_ensemble_model.keras"
+}
