@@ -494,3 +494,11 @@ Filtros em `GET /api/v1/appointments`:
 - `date=YYYY-MM-DD`
 - `doctor_id=<id>`
 - `status=<SCHEDULED|CONFIRMED|IN_PROGRESS|COMPLETED|CANCELLED|NO_SHOW|RESCHEDULED>`
+
+### Prontuário + IA
+- `POST /api/v1/medical-records`
+- `GET /api/v1/medical-records/{id}`
+- `PUT /api/v1/medical-records/{id}`
+- `POST /api/v1/documents/upload`
+- `POST /api/v1/ai/analyze`
+- `PUT /api/v1/ai/{id}/validate`

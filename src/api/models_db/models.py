@@ -142,3 +142,53 @@ class ScheduleBlock(db.Model):
     end_time = db.Column(db.DateTime, nullable=False)
     reason = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+
+
+class MedicalRecord(TimestampMixin, db.Model):
+    __tablename__ = "medical_records"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patients.id"), nullable=False, index=True)
+    doctor_profile_id = db.Column(db.Integer, db.ForeignKey("doctor_profiles.id"), nullable=False, index=True)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), nullable=False, index=True)
+    anamnesis = db.Column(db.Text, nullable=False, default="")
+    physical_exam = db.Column(db.Text, nullable=False, default="")
+    diagnostic_hypothesis = db.Column(db.Text, nullable=False, default="")
+    diagnosis = db.Column(db.Text, nullable=False, default="")
+    conduct = db.Column(db.Text, nullable=False, default="")
+    prescriptions = db.Column(db.Text, nullable=False, default="")
+    exams_requested = db.Column(db.Text, nullable=False, default="")
+    evolution = db.Column(db.Text, nullable=False, default="")
+
+
+class Document(db.Model):
+    __tablename__ = "documents"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    medical_record_id = db.Column(db.Integer, db.ForeignKey("medical_records.id"), nullable=False, index=True)
+    file_path = db.Column(db.String(500), nullable=False)
+    file_type = db.Column(db.String(100), nullable=False)
+    uploaded_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+
+
+class DoctorAgreementEnum(str, enum.Enum):
+    YES = "YES"
+    NO = "NO"
+    PARTIAL = "PARTIAL"
+
+
+class AIAnalysis(db.Model):
+    __tablename__ = "ai_analyses"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    medical_record_id = db.Column(db.Integer, db.ForeignKey("medical_records.id"), nullable=False, index=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
+    ai_diagnosis = db.Column(db.String(64), nullable=False)
+    probability = db.Column(db.Float, nullable=False)
+    confidence_level = db.Column(db.String(32), nullable=False)
+    recommendation = db.Column(db.Text, nullable=False)
+    model_version = db.Column(db.String(64), nullable=False)
+    doctor_agreement = db.Column(db.Enum(DoctorAgreementEnum), nullable=True)
+    doctor_final_assessment = db.Column(db.Text, nullable=True)
+    doctor_notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())

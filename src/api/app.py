@@ -9,6 +9,9 @@ from .controllers.admin_controller import AdminController
 from .controllers.patient_controller import PatientController
 from .controllers.appointment_controller import AppointmentController
 from .controllers.schedule_block_controller import ScheduleBlockController
+from .controllers.medical_record_controller import MedicalRecordController
+from .controllers.document_controller import DocumentController
+from .controllers.ai_controller import AIController
 from .database.extensions import db, migrate, jwt
 from .seed.seed_data import run_seed
 
@@ -40,6 +43,9 @@ def create_app(config: APIConfig = None) -> Flask:
     patient_controller = PatientController()
     appointment_controller = AppointmentController()
     schedule_block_controller = ScheduleBlockController()
+    medical_record_controller = MedicalRecordController()
+    document_controller = DocumentController()
+    ai_controller = AIController()
 
     @app.route('/api/v1/predict', methods=['POST'])
     def predict():
@@ -145,6 +151,32 @@ def create_app(config: APIConfig = None) -> Flask:
     @app.route('/api/v1/schedule-blocks/<int:block_id>', methods=['DELETE'])
     def delete_schedule_block(block_id):
         return schedule_block_controller.delete(block_id)
+
+
+
+    @app.route('/api/v1/medical-records', methods=['POST'])
+    def create_medical_record():
+        return medical_record_controller.create()
+
+    @app.route('/api/v1/medical-records/<int:record_id>', methods=['GET'])
+    def get_medical_record(record_id):
+        return medical_record_controller.get(record_id)
+
+    @app.route('/api/v1/medical-records/<int:record_id>', methods=['PUT'])
+    def update_medical_record(record_id):
+        return medical_record_controller.update(record_id)
+
+    @app.route('/api/v1/documents/upload', methods=['POST'])
+    def upload_document():
+        return document_controller.upload()
+
+    @app.route('/api/v1/ai/analyze', methods=['POST'])
+    def ai_analyze():
+        return ai_controller.analyze()
+
+    @app.route('/api/v1/ai/<int:analysis_id>/validate', methods=['PUT'])
+    def ai_validate(analysis_id):
+        return ai_controller.validate(analysis_id)
 
     @app.cli.command("seed")
     def seed_command():
