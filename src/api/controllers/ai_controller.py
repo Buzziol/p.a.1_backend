@@ -2,6 +2,7 @@ from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..database.extensions import db
+from ..utils.request_utils import get_json_body
 from ..models_db.models import AIAnalysis, Document, MedicalRecord, User, DoctorProfile, DoctorAgreementEnum
 from ..services.prediction_service import PredictionService
 from ..api_config import APIConfig
@@ -22,8 +23,7 @@ class AIController:
         if request.form:
             data = request.form.to_dict()
         else:
-            data = request.get_json(force=True)
-            print("DEBUG BODY:", data)
+            data = get_json_body()
             if not data:
                 return jsonify({"error": "Body JSON inválido ou vazio"}), 400
 
@@ -90,8 +90,7 @@ class AIController:
         mr = MedicalRecord.query.get(analysis.medical_record_id)
         if not dp or not mr or mr.doctor_profile_id != dp.id:
             return jsonify({"error": "Forbidden"}), 403
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         try:

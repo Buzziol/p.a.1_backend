@@ -4,6 +4,7 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..models_db.models import Appointment, AppointmentStatus, User, RoleEnum, DoctorProfile, ScheduleBlock
 from ..database.extensions import db
+from ..utils.request_utils import get_json_body
 
 
 class AppointmentController:
@@ -57,8 +58,7 @@ class AppointmentController:
     @role_required("CLINIC_ADMIN", "RECEPTIONIST")
     def create(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         required = ["patient_id", "doctor_profile_id", "scheduled_at"]
@@ -131,8 +131,7 @@ class AppointmentController:
             dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
             if not dp or ap.doctor_profile_id != dp.id:
                 return jsonify({"error": "Forbidden"}), 403
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         try:
@@ -151,8 +150,7 @@ class AppointmentController:
         ap = Appointment.query.get(appointment_id)
         if not ap or ap.clinic_id != actor.clinic_id:
             return jsonify({"error": "Not found"}), 404
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         dt = datetime.fromisoformat(data.get("scheduled_at"))

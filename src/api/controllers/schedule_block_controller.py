@@ -4,6 +4,7 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..models_db.models import ScheduleBlock, User, RoleEnum, DoctorProfile, Appointment, AppointmentStatus
 from ..database.extensions import db
+from ..utils.request_utils import get_json_body
 
 
 class ScheduleBlockController:
@@ -37,8 +38,7 @@ class ScheduleBlockController:
     @role_required("DOCTOR", "CLINIC_ADMIN")
     def create(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         doctor_profile_id = data.get("doctor_profile_id")

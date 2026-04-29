@@ -3,6 +3,7 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..models_db.models import Clinic, User, RoleEnum, AuditLog
 from ..database.extensions import db
+from ..utils.request_utils import get_json_body
 
 
 class AdminController:
@@ -13,8 +14,7 @@ class AdminController:
 
     @role_required("SUPER_ADMIN")
     def create_clinic(self):
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         if not data.get("name"):
@@ -39,8 +39,7 @@ class AdminController:
     @role_required("SUPER_ADMIN", "CLINIC_ADMIN")
     def create_user(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(force=True)
-        print("DEBUG BODY:", data)
+        data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         required = ["name", "email", "password", "role"]

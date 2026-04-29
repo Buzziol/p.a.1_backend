@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from flasgger import Swagger
 
@@ -36,6 +36,11 @@ def create_app(config: APIConfig = None) -> Flask:
     jwt.init_app(app)
 
     from .models_db import models  # noqa: F401
+
+    @app.errorhandler(400)
+    def handle_bad_request(error):
+        return jsonify({"error": "Requisição inválida", "message": str(error)}), 400
+
 
     prediction_controller = PredictionController()
     auth_controller = AuthController()
