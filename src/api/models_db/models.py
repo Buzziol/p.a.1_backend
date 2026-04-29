@@ -92,3 +92,53 @@ class AuditLog(db.Model):
     metadata_json = db.Column(db.JSON, nullable=True)
     ip_address = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+
+
+class Patient(TimestampMixin, db.Model):
+    __tablename__ = "patients"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    cpf = db.Column(db.String(20), nullable=False)
+    address = db.Column(db.String(255), nullable=False)
+    cep = db.Column(db.String(16), nullable=False)
+    phone = db.Column(db.String(32), nullable=False)
+    birth_date = db.Column(db.Date, nullable=False)
+    blood_type = db.Column(db.String(8), nullable=False)
+    email = db.Column(db.String(255), nullable=False)
+    marital_status = db.Column(db.String(64), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    __table_args__ = (db.UniqueConstraint('clinic_id', 'cpf', name='uq_patient_clinic_cpf'),)
+
+
+class AppointmentStatus(str, enum.Enum):
+    SCHEDULED = "SCHEDULED"
+    CONFIRMED = "CONFIRMED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    NO_SHOW = "NO_SHOW"
+    RESCHEDULED = "RESCHEDULED"
+
+
+class Appointment(TimestampMixin, db.Model):
+    __tablename__ = "appointments"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patients.id"), nullable=False, index=True)
+    doctor_profile_id = db.Column(db.Integer, db.ForeignKey("doctor_profiles.id"), nullable=False, index=True)
+    scheduled_at = db.Column(db.DateTime, nullable=False, index=True)
+    status = db.Column(db.Enum(AppointmentStatus), nullable=False, default=AppointmentStatus.SCHEDULED)
+    notes = db.Column(db.Text, nullable=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+
+
+class ScheduleBlock(db.Model):
+    __tablename__ = "schedule_blocks"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    doctor_profile_id = db.Column(db.Integer, db.ForeignKey("doctor_profiles.id"), nullable=False, index=True)
+    start_time = db.Column(db.DateTime, nullable=False)
+    end_time = db.Column(db.DateTime, nullable=False)
+    reason = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())

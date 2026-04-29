@@ -471,3 +471,20 @@ flask seed
 - `GET /api/v1/audit-logs`
 - `GET /api/v1/health` (legado preservado)
 - `POST /api/v1/predict` (legado preservado)
+
+### Novos endpoints (Patients/Appointments/Schedule Blocks)
+- `POST /api/v1/patients`
+- `GET /api/v1/patients`
+- `GET /api/v1/patients/{id}`
+- `PUT /api/v1/patients/{id}`
+- `DELETE /api/v1/patients/{id}`
+- `GET /api/v1/patients/my`
+- `POST /api/v1/appointments`
+- `GET /api/v1/appointments`
+- `GET /api/v1/appointments/doctor`
+- `PUT /api/v1/appointments/{id}/status`
+- `PUT /api/v1/appointments/{id}/reschedule`
+- `DELETE /api/v1/appointments/{id}`
+- `POST /api/v1/schedule-blocks`
+- `GET /api/v1/schedule-blocks`
+- `DELETE /api/v1/schedule-blocks/{id}`

@@ -6,6 +6,9 @@ from .api_config import APIConfig
 from .controllers.prediction_controller import PredictionController
 from .controllers.auth_controller import AuthController
 from .controllers.admin_controller import AdminController
+from .controllers.patient_controller import PatientController
+from .controllers.appointment_controller import AppointmentController
+from .controllers.schedule_block_controller import ScheduleBlockController
 from .database.extensions import db, migrate, jwt
 from .seed.seed_data import run_seed
 
@@ -34,6 +37,9 @@ def create_app(config: APIConfig = None) -> Flask:
     prediction_controller = PredictionController()
     auth_controller = AuthController()
     admin_controller = AdminController()
+    patient_controller = PatientController()
+    appointment_controller = AppointmentController()
+    schedule_block_controller = ScheduleBlockController()
 
     @app.route('/api/v1/predict', methods=['POST'])
     def predict():
@@ -74,6 +80,67 @@ def create_app(config: APIConfig = None) -> Flask:
     @app.route('/api/v1/audit-logs', methods=['GET'])
     def list_audit_logs():
         return admin_controller.list_audit_logs()
+
+
+    @app.route('/api/v1/patients', methods=['POST'])
+    def create_patient():
+        return patient_controller.create_patient()
+
+    @app.route('/api/v1/patients', methods=['GET'])
+    def list_patients():
+        return patient_controller.list_patients()
+
+    @app.route('/api/v1/patients/<int:patient_id>', methods=['GET'])
+    def get_patient(patient_id):
+        return patient_controller.get_patient(patient_id)
+
+    @app.route('/api/v1/patients/<int:patient_id>', methods=['PUT'])
+    def update_patient(patient_id):
+        return patient_controller.update_patient(patient_id)
+
+    @app.route('/api/v1/patients/<int:patient_id>', methods=['DELETE'])
+    def delete_patient(patient_id):
+        return patient_controller.delete_patient(patient_id)
+
+    @app.route('/api/v1/patients/my', methods=['GET'])
+    def my_patients():
+        return patient_controller.my_patients()
+
+    @app.route('/api/v1/appointments', methods=['POST'])
+    def create_appointment():
+        return appointment_controller.create()
+
+    @app.route('/api/v1/appointments', methods=['GET'])
+    def list_appointments():
+        return appointment_controller.list()
+
+    @app.route('/api/v1/appointments/doctor', methods=['GET'])
+    def doctor_appointments():
+        return appointment_controller.doctor_list()
+
+    @app.route('/api/v1/appointments/<int:appointment_id>/status', methods=['PUT'])
+    def update_appointment_status(appointment_id):
+        return appointment_controller.update_status(appointment_id)
+
+    @app.route('/api/v1/appointments/<int:appointment_id>/reschedule', methods=['PUT'])
+    def reschedule_appointment(appointment_id):
+        return appointment_controller.reschedule(appointment_id)
+
+    @app.route('/api/v1/appointments/<int:appointment_id>', methods=['DELETE'])
+    def cancel_appointment(appointment_id):
+        return appointment_controller.cancel(appointment_id)
+
+    @app.route('/api/v1/schedule-blocks', methods=['POST'])
+    def create_schedule_block():
+        return schedule_block_controller.create()
+
+    @app.route('/api/v1/schedule-blocks', methods=['GET'])
+    def list_schedule_blocks():
+        return schedule_block_controller.list()
+
+    @app.route('/api/v1/schedule-blocks/<int:block_id>', methods=['DELETE'])
+    def delete_schedule_block(block_id):
+        return schedule_block_controller.delete(block_id)
 
     @app.cli.command("seed")
     def seed_command():
