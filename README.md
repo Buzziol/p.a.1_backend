@@ -488,3 +488,9 @@ flask seed
 - `POST /api/v1/schedule-blocks`
 - `GET /api/v1/schedule-blocks`
 - `DELETE /api/v1/schedule-blocks/{id}`
+- `GET /api/v1/appointments/doctor/day?date=YYYY-MM-DD`
+
+Filtros em `GET /api/v1/appointments`:
+- `date=YYYY-MM-DD`
+- `doctor_id=<id>`
+- `status=<SCHEDULED|CONFIRMED|IN_PROGRESS|COMPLETED|CANCELLED|NO_SHOW|RESCHEDULED>`

@@ -118,6 +118,10 @@ def create_app(config: APIConfig = None) -> Flask:
     def doctor_appointments():
         return appointment_controller.doctor_list()
 
+    @app.route('/api/v1/appointments/doctor/day', methods=['GET'])
+    def doctor_appointments_day():
+        return appointment_controller.doctor_day()
+
     @app.route('/api/v1/appointments/<int:appointment_id>/status', methods=['PUT'])
     def update_appointment_status(appointment_id):
         return appointment_controller.update_status(appointment_id)

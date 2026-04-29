@@ -1,12 +1,39 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
-from ..models_db.models import ScheduleBlock, User, RoleEnum, DoctorProfile
+from ..models_db.models import ScheduleBlock, User, RoleEnum, DoctorProfile, Appointment, AppointmentStatus
 from ..database.extensions import db
 
 
 class ScheduleBlockController:
+    def _has_block_overlap(self, clinic_id, doctor_profile_id, start, end):
+        return ScheduleBlock.query.filter(
+            ScheduleBlock.clinic_id == clinic_id,
+            ScheduleBlock.doctor_profile_id == doctor_profile_id,
+            ScheduleBlock.start_time < end,
+            ScheduleBlock.end_time > start,
+        ).first() is not None
+
+    def _has_appointment_overlap(self, clinic_id, doctor_profile_id, start, end):
+        rows = Appointment.query.filter(
+            Appointment.clinic_id == clinic_id,
+            Appointment.doctor_profile_id == doctor_profile_id,
+            Appointment.status.in_([
+                AppointmentStatus.SCHEDULED,
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.IN_PROGRESS,
+                AppointmentStatus.RESCHEDULED,
+            ])
+        ).all()
+        for ap in rows:
+            ap_start = ap.scheduled_at
+            ap_end = ap.scheduled_at + timedelta(minutes=30)
+            if ap_start < end and ap_end > start:
+                return True
+        return False
+
+
     @role_required("DOCTOR", "CLINIC_ADMIN")
     def create(self):
         actor = User.query.get(int(get_jwt_identity()))
@@ -19,6 +46,12 @@ class ScheduleBlockController:
             return jsonify({"error": "doctor_profile_id obrigatório"}), 400
         start = datetime.fromisoformat(data["start_time"])
         end = datetime.fromisoformat(data["end_time"])
+        if end <= start:
+            return jsonify({"error": "Intervalo inválido"}), 400
+        if self._has_block_overlap(actor.clinic_id, doctor_profile_id, start, end):
+            return jsonify({"error": "Conflito com bloqueio existente"}), 409
+        if self._has_appointment_overlap(actor.clinic_id, doctor_profile_id, start, end):
+            return jsonify({"error": "Conflito com consulta existente"}), 409
         block = ScheduleBlock(clinic_id=actor.clinic_id, doctor_profile_id=doctor_profile_id, start_time=start, end_time=end, reason=data.get("reason"))
         db.session.add(block)
         db.session.commit()

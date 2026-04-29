@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
@@ -7,20 +7,52 @@ from ..database.extensions import db
 
 
 class AppointmentController:
+    SLOT_MINUTES = 30
+
+    def _interval(self, scheduled_at):
+        return scheduled_at, scheduled_at + timedelta(minutes=self.SLOT_MINUTES)
+
+    def _overlap_filter(self, start_field, end_field, start, end):
+        return (start_field < end) & (end_field > start)
+
     def _has_conflict(self, clinic_id, doctor_profile_id, scheduled_at, exclude_id=None):
-        q = Appointment.query.filter_by(clinic_id=clinic_id, doctor_profile_id=doctor_profile_id, scheduled_at=scheduled_at)
+        start, end = self._interval(scheduled_at)
+        query = Appointment.query.filter(
+            Appointment.clinic_id == clinic_id,
+            Appointment.doctor_profile_id == doctor_profile_id,
+            Appointment.status.in_([
+                AppointmentStatus.SCHEDULED,
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.IN_PROGRESS,
+                AppointmentStatus.RESCHEDULED,
+            ]),
+        )
         if exclude_id:
-            q = q.filter(Appointment.id != exclude_id)
-        q = q.filter(Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS]))
-        return q.first() is not None
+            query = query.filter(Appointment.id != exclude_id)
+        for row in query.all():
+            row_start, row_end = self._interval(row.scheduled_at)
+            if row_start < end and row_end > start:
+                return True
+        return False
 
     def _is_blocked(self, clinic_id, doctor_profile_id, scheduled_at):
+        start, end = self._interval(scheduled_at)
         return ScheduleBlock.query.filter(
             ScheduleBlock.clinic_id == clinic_id,
             ScheduleBlock.doctor_profile_id == doctor_profile_id,
-            ScheduleBlock.start_time <= scheduled_at,
-            ScheduleBlock.end_time >= scheduled_at
+            ScheduleBlock.start_time < end,
+            ScheduleBlock.end_time > start,
         ).first() is not None
+
+    def _can_transition(self, old_status, new_status):
+        if new_status == AppointmentStatus.NO_SHOW:
+            return True
+        transitions = {
+            AppointmentStatus.SCHEDULED: {AppointmentStatus.CONFIRMED, AppointmentStatus.CANCELLED},
+            AppointmentStatus.CONFIRMED: {AppointmentStatus.IN_PROGRESS, AppointmentStatus.CANCELLED},
+            AppointmentStatus.IN_PROGRESS: {AppointmentStatus.COMPLETED},
+        }
+        return new_status in transitions.get(old_status, set())
 
     @role_required("CLINIC_ADMIN", "RECEPTIONIST")
     def create(self):
@@ -42,7 +74,21 @@ class AppointmentController:
     @role_required("CLINIC_ADMIN", "RECEPTIONIST")
     def list(self):
         actor = User.query.get(int(get_jwt_identity()))
-        rows = Appointment.query.filter_by(clinic_id=actor.clinic_id).order_by(Appointment.scheduled_at.desc()).all()
+        q = Appointment.query.filter_by(clinic_id=actor.clinic_id)
+        date_filter = request.args.get("date")
+        doctor_id = request.args.get("doctor_id", type=int)
+        status = request.args.get("status")
+        if date_filter:
+            day = datetime.fromisoformat(date_filter)
+            q = q.filter(Appointment.scheduled_at >= day, Appointment.scheduled_at < day + timedelta(days=1))
+        if doctor_id:
+            q = q.filter(Appointment.doctor_profile_id == doctor_id)
+        if status:
+            try:
+                q = q.filter(Appointment.status == AppointmentStatus(status))
+            except Exception:
+                return jsonify({"error": "status inválido"}), 400
+        rows = q.order_by(Appointment.scheduled_at.desc()).all()
         return jsonify([{"id": a.id, "patient_id": a.patient_id, "doctor_profile_id": a.doctor_profile_id, "scheduled_at": a.scheduled_at.isoformat(), "status": a.status.value} for a in rows]), 200
 
     @role_required("DOCTOR")
@@ -52,6 +98,24 @@ class AppointmentController:
         if not dp:
             return jsonify([]), 200
         rows = Appointment.query.filter_by(clinic_id=actor.clinic_id, doctor_profile_id=dp.id).order_by(Appointment.scheduled_at.desc()).all()
+        return jsonify([{"id": a.id, "patient_id": a.patient_id, "scheduled_at": a.scheduled_at.isoformat(), "status": a.status.value} for a in rows]), 200
+
+    @role_required("DOCTOR")
+    def doctor_day(self):
+        actor = User.query.get(int(get_jwt_identity()))
+        dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+        if not dp:
+            return jsonify([]), 200
+        date_str = request.args.get("date")
+        if not date_str:
+            return jsonify({"error": "date é obrigatório (YYYY-MM-DD)"}), 400
+        day = datetime.fromisoformat(date_str)
+        rows = Appointment.query.filter(
+            Appointment.clinic_id == actor.clinic_id,
+            Appointment.doctor_profile_id == dp.id,
+            Appointment.scheduled_at >= day,
+            Appointment.scheduled_at < day + timedelta(days=1),
+        ).order_by(Appointment.scheduled_at.asc()).all()
         return jsonify([{"id": a.id, "patient_id": a.patient_id, "scheduled_at": a.scheduled_at.isoformat(), "status": a.status.value} for a in rows]), 200
 
     @role_required("CLINIC_ADMIN", "RECEPTIONIST", "DOCTOR")
@@ -66,9 +130,12 @@ class AppointmentController:
                 return jsonify({"error": "Forbidden"}), 403
         data = request.get_json(silent=True) or {}
         try:
-            ap.status = AppointmentStatus(data.get("status"))
+            new_status = AppointmentStatus(data.get("status"))
         except Exception:
             return jsonify({"error": "status inválido"}), 400
+        if not self._can_transition(ap.status, new_status):
+            return jsonify({"error": f"Transição inválida: {ap.status.value} -> {new_status.value}"}), 422
+        ap.status = new_status
         db.session.commit()
         return jsonify({"id": ap.id, "status": ap.status.value}), 200
 
