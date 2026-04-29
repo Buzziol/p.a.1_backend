@@ -9,3 +9,7 @@ pillow
 flask
 flask-cors
 flasgger
+Flask-SQLAlchemy
+Flask-Migrate
+Flask-JWT-Extended
+python-dotenv

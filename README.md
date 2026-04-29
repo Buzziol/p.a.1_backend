@@ -425,3 +425,49 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 - Comunidade de Machine Learning
 
 ---
+## 🧱 Fundação Backend Multi-clínica (fase atual)
+
+### Variáveis de ambiente
+Crie um `.env` na raiz:
+
+```env
+FLASK_ENV=development
+SECRET_KEY=change-me
+JWT_SECRET_KEY=change-me-too
+DATABASE_URL=sqlite:///dermato.db
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+API_HOST=0.0.0.0
+API_PORT=5000
+```
+
+### Migrations
+```bash
+export FLASK_APP=src.api.app:create_app
+flask db init
+flask db migrate -m "init foundation"
+flask db upgrade
+```
+
+### Seed inicial
+```bash
+export FLASK_APP=src.api.app:create_app
+flask seed
+```
+
+### Usuários seed
+- superadmin@dermato.local / Admin123!
+- admin@dermato.local / Admin123!
+- medico@dermato.local / Admin123!
+- recepcao@dermato.local / Admin123!
+
+### Endpoints da fase
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+- `POST /api/v1/auth/logout`
+- `GET /api/v1/clinics`
+- `POST /api/v1/clinics`
+- `GET /api/v1/users`
+- `POST /api/v1/users`
+- `GET /api/v1/audit-logs`
+- `GET /api/v1/health` (legado preservado)
+- `POST /api/v1/predict` (legado preservado)
