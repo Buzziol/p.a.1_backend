@@ -13,7 +13,10 @@ class AdminController:
 
     @role_required("SUPER_ADMIN")
     def create_clinic(self):
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         if not data.get("name"):
             return jsonify({"error": "name é obrigatório"}), 400
         clinic = Clinic(name=data["name"], cnpj=data.get("cnpj"), phone=data.get("phone"), email=data.get("email"), is_active=True)
@@ -36,7 +39,10 @@ class AdminController:
     @role_required("SUPER_ADMIN", "CLINIC_ADMIN")
     def create_user(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         required = ["name", "email", "password", "role"]
         if any(not data.get(k) for k in required):
             return jsonify({"error": "name,email,password,role obrigatórios"}), 400

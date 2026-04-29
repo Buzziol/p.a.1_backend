@@ -18,8 +18,17 @@ class AIController:
         if not dp:
             return jsonify({"error": "Doctor profile não encontrado"}), 400
 
-        medical_record_id = request.form.get("medical_record_id") or (request.get_json(silent=True) or {}).get("medical_record_id")
-        document_id = request.form.get("document_id") or (request.get_json(silent=True) or {}).get("document_id")
+        data = {}
+        if request.form:
+            data = request.form.to_dict()
+        else:
+            data = request.get_json(force=True)
+            print("DEBUG BODY:", data)
+            if not data:
+                return jsonify({"error": "Body JSON inválido ou vazio"}), 400
+
+        medical_record_id = data.get("medical_record_id")
+        document_id = data.get("document_id")
 
         if not medical_record_id:
             return jsonify({"error": "medical_record_id é obrigatório"}), 400
@@ -81,7 +90,10 @@ class AIController:
         mr = MedicalRecord.query.get(analysis.medical_record_id)
         if not dp or not mr or mr.doctor_profile_id != dp.id:
             return jsonify({"error": "Forbidden"}), 403
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         try:
             analysis.doctor_agreement = DoctorAgreementEnum(data.get("doctor_agreement"))
         except Exception:

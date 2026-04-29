@@ -57,7 +57,10 @@ class AppointmentController:
     @role_required("CLINIC_ADMIN", "RECEPTIONIST")
     def create(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         required = ["patient_id", "doctor_profile_id", "scheduled_at"]
         if any(not data.get(k) for k in required):
             return jsonify({"error": "Campos obrigatórios ausentes"}), 400
@@ -128,7 +131,10 @@ class AppointmentController:
             dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
             if not dp or ap.doctor_profile_id != dp.id:
                 return jsonify({"error": "Forbidden"}), 403
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         try:
             new_status = AppointmentStatus(data.get("status"))
         except Exception:
@@ -145,7 +151,11 @@ class AppointmentController:
         ap = Appointment.query.get(appointment_id)
         if not ap or ap.clinic_id != actor.clinic_id:
             return jsonify({"error": "Not found"}), 404
-        dt = datetime.fromisoformat((request.get_json(silent=True) or {}).get("scheduled_at"))
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
+        dt = datetime.fromisoformat(data.get("scheduled_at"))
         if self._has_conflict(actor.clinic_id, ap.doctor_profile_id, dt, exclude_id=ap.id):
             return jsonify({"error": "Conflito de agenda"}), 409
         if self._is_blocked(actor.clinic_id, ap.doctor_profile_id, dt):

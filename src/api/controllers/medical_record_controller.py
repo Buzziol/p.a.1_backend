@@ -12,7 +12,10 @@ class MedicalRecordController:
         dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         if not dp:
             return jsonify({"error": "Doctor profile não encontrado"}), 400
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         required = ["patient_id", "appointment_id"]
         if any(not data.get(k) for k in required):
             return jsonify({"error": "patient_id e appointment_id são obrigatórios"}), 400
@@ -69,7 +72,10 @@ class MedicalRecordController:
             return jsonify({"error": "Not found"}), 404
         if not dp or mr.doctor_profile_id != dp.id:
             return jsonify({"error": "Forbidden"}), 403
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         for field in ["anamnesis", "physical_exam", "diagnostic_hypothesis", "diagnosis", "conduct", "prescriptions", "exams_requested", "evolution"]:
             if field in data:
                 setattr(mr, field, data[field])

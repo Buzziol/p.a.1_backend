@@ -37,7 +37,10 @@ class ScheduleBlockController:
     @role_required("DOCTOR", "CLINIC_ADMIN")
     def create(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         doctor_profile_id = data.get("doctor_profile_id")
         if actor.role == RoleEnum.DOCTOR:
             dp = DoctorProfile.query.filter_by(user_id=actor.id).first()

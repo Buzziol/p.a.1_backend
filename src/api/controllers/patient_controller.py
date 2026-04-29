@@ -10,7 +10,10 @@ class PatientController:
     @role_required("CLINIC_ADMIN", "RECEPTIONIST")
     def create_patient(self):
         actor = User.query.get(int(get_jwt_identity()))
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         required = ["name", "cpf", "address", "cep", "phone", "birth_date", "blood_type", "email", "marital_status"]
         if any(not data.get(k) for k in required):
             return jsonify({"error": "Campos obrigatórios ausentes"}), 400
@@ -41,7 +44,10 @@ class PatientController:
         p = Patient.query.get(patient_id)
         if not p or p.clinic_id != actor.clinic_id:
             return jsonify({"error": "Not found"}), 404
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(force=True)
+        print("DEBUG BODY:", data)
+        if not data:
+            return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         for field in ["name", "address", "cep", "phone", "blood_type", "email", "marital_status"]:
             if field in data:
                 setattr(p, field, data[field])
