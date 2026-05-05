@@ -502,3 +502,162 @@ Filtros em `GET /api/v1/appointments`:
 - `POST /api/v1/documents/upload`
 - `POST /api/v1/ai/analyze`
 - `PUT /api/v1/ai/{id}/validate`
+
+
+# Execução (Outras Máquinas)
+
+Este parte explica como executar o backend em outra máquina (Windows/Linux/macOS), com foco no cenário local do TCC.
+
+---
+
+## 1- Pré-requisitos
+
+- Python 3.10+
+- pip
+- Git
+- (Opcional) virtualenv
+
+Observação: este projeto usa modelos de IA já versionados em src/models/. Não altere esses arquivos para execução normal.
+
+---
+
+## 2- Clonar o projeto
+
+git clone <URL_DO_REPOSITORIO>  
+cd p.a.1_backend  
+
+---
+
+## 3- Criar e ativar ambiente virtual
+
+Linux/macOS:
+
+python3 -m venv .venv  
+source .venv/bin/activate  
+
+Windows (PowerShell):
+
+python -m venv .venv  
+.venv\Scripts\Activate.ps1  
+
+Windows (CMD):
+
+python -m venv .venv  
+.venv\Scripts\activate.bat  
+
+---
+
+## 4- Instalar dependências
+
+pip install -r requirements.txt  
+
+Se ocorrer problema de rede/proxy, configure o pip localmente e tente novamente.
+
+---
+
+## 5- Configurar variáveis de ambiente
+
+Crie um arquivo .env na raiz do projeto:
+
+FLASK_ENV=development  
+SECRET_KEY=change-me  
+JWT_SECRET_KEY=change-me-too  
+DATABASE_URL=sqlite:///dermato.db  
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173  
+API_HOST=0.0.0.0  
+API_PORT=5000  
+
+---
+
+## 6- Rodar migrations
+
+Linux/macOS:
+
+export FLASK_APP=src.api.app:create_app  
+flask db migrate -m "init"  
+flask db upgrade  
+
+Windows (PowerShell):
+
+$env:FLASK_APP="src.api.app:create_app"  
+flask db migrate -m "init"  
+flask db upgrade  
+
+Se a pasta migrations/ já existir, rode apenas:
+
+flask db migrate  
+flask db upgrade  
+
+---
+
+## 7) Rodar seed inicial
+
+Linux/macOS:
+
+export FLASK_APP=src.api.app:create_app  
+flask seed  
+
+Windows (PowerShell):
+
+$env:FLASK_APP="src.api.app:create_app"  
+flask seed  
+
+Usuários padrão:
+
+superadmin@dermato.local / Admin123!  
+admin@dermato.local / Admin123!  
+medico@dermato.local / Admin123!  
+recepcao@dermato.local / Admin123!  
+
+---
+
+## 8- Subir a API
+
+python run_api.py  
+
+API disponível em:
+
+Swagger/docs: http://localhost:5000/docs  
+Health: http://localhost:5000/api/v1/health  
+Predict (IA legado): http://localhost:5000/api/v1/predict  
+
+---
+
+## 9- Teste rápido (sanidade)
+
+Health:
+
+curl http://localhost:5000/api/v1/health  
+
+Login:
+
+curl -X POST http://localhost:5000/api/v1/auth/login \
+-H "Content-Type: application/json" \
+-d '{"email":"superadmin@dermato.local","password":"Admin123!"}'  
+
+---
+
+## 10- Problemas comuns
+
+Erro de dependência (Flask, JWT, etc):
+- Verifique se o ambiente virtual está ativo
+- Rode pip install novamente
+- Verifique rede/proxy
+
+Erro de banco/migration:
+- Verifique DATABASE_URL
+- Se necessário, delete o SQLite e rode migrations novamente
+
+Porta em uso:
+- Altere API_PORT no .env (ex: 5001)
+
+Erro de CORS:
+- Ajuste CORS_ORIGINS para o frontend correto
+
+---
+
+## 11- Observações importantes
+
+- NÃO alterar a lógica da IA nem arquivos em src/models/
+- Endpoints /api/v1/predict e /api/v1/health devem continuar funcionando
+- Para produção/homologação, usar PostgreSQL em vez de SQLite
