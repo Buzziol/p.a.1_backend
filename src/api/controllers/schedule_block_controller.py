@@ -17,22 +17,19 @@ class ScheduleBlockController:
         ).first() is not None
 
     def _has_appointment_overlap(self, clinic_id, doctor_profile_id, start, end):
-        rows = Appointment.query.filter(
+        slot_start = start - timedelta(minutes=30)
+        return Appointment.query.filter(
             Appointment.clinic_id == clinic_id,
             Appointment.doctor_profile_id == doctor_profile_id,
+            Appointment.scheduled_at >= slot_start,
+            Appointment.scheduled_at < end,
             Appointment.status.in_([
                 AppointmentStatus.SCHEDULED,
                 AppointmentStatus.CONFIRMED,
                 AppointmentStatus.IN_PROGRESS,
                 AppointmentStatus.RESCHEDULED,
             ])
-        ).all()
-        for ap in rows:
-            ap_start = ap.scheduled_at
-            ap_end = ap.scheduled_at + timedelta(minutes=30)
-            if ap_start < end and ap_end > start:
-                return True
-        return False
+        ).first() is not None
 
 
     @role_required("DOCTOR", "CLINIC_ADMIN")

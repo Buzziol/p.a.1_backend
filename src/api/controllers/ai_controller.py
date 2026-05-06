@@ -1,5 +1,9 @@
+from pathlib import Path
+
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
+from werkzeug.utils import secure_filename
+
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
@@ -9,8 +13,20 @@ from ..api_config import APIConfig
 from ..models.prediction_request import PredictionRequest
 
 
+# Singleton para não recarregar o modelo a cada request
+_prediction_service = None
+
+
+def _get_prediction_service():
+    global _prediction_service
+    if _prediction_service is None:
+        _prediction_service = PredictionService(APIConfig())
+    return _prediction_service
+
+
 class AIController:
     DISCLAIMER = "Este resultado é apenas uma sugestão baseada em inteligência artificial e não substitui avaliação médica profissional."
+    STORAGE_DIR = Path("storage") / "documents"
 
     @role_required("DOCTOR")
     def analyze(self):
@@ -38,25 +54,52 @@ class AIController:
         if mr.doctor_profile_id != dp.id:
             return jsonify({"error": "Forbidden"}), 403
 
-        if document_id:
-            doc = Document.query.get(int(document_id))
-            if not doc or doc.medical_record_id != mr.id:
-                return jsonify({"error": "Documento inválido"}), 404
-            image_file = open(doc.file_path, "rb")
-            wrapped = type("F", (), {"filename": doc.file_path.split('/')[-1], "read": image_file.read, "seek": image_file.seek})
-            pred_req = PredictionRequest(image_file=wrapped, patient_id=str(mr.patient_id))
-        else:
-            if 'file' not in request.files:
+        doc = None
+        image_file_handle = None
+
+        try:
+            if document_id:
+                doc = Document.query.get(int(document_id))
+                if not doc or doc.medical_record_id != mr.id:
+                    return jsonify({"error": "Documento inválido"}), 404
+                image_file_handle = open(doc.file_path, "rb")
+                wrapped = type("F", (), {
+                    "filename": doc.file_path.split('/')[-1],
+                    "read": image_file_handle.read,
+                    "seek": image_file_handle.seek,
+                })()
+                pred_req = PredictionRequest(image_file=wrapped, patient_id=str(mr.patient_id))
+            elif 'file' in request.files:
+                file = request.files['file']
+                # Salvar o arquivo como documento primeiro para persistir a análise
+                self.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+                filename = secure_filename(file.filename)
+                path = self.STORAGE_DIR / f"{mr.id}_{filename}"
+                file.save(path)
+                doc = Document(
+                    clinic_id=actor.clinic_id,
+                    medical_record_id=mr.id,
+                    file_path=str(path),
+                    file_type=file.mimetype or "application/octet-stream",
+                )
+                db.session.add(doc)
+                db.session.flush()
+                # Reabrir para predição
+                image_file_handle = open(str(path), "rb")
+                wrapped = type("F", (), {
+                    "filename": filename,
+                    "read": image_file_handle.read,
+                    "seek": image_file_handle.seek,
+                })()
+                pred_req = PredictionRequest(image_file=wrapped, patient_id=str(mr.patient_id))
+            else:
                 return jsonify({"error": "file ou document_id é obrigatório"}), 400
-            file = request.files['file']
-            pred_req = PredictionRequest(image_file=file, patient_id=str(mr.patient_id))
-            doc = None
 
-        service = PredictionService(APIConfig())
-        result = service.predict(pred_req)
-
-        if doc is None:
-            return jsonify({"error": "Para persistir a análise, envie document_id ou faça upload antes"}), 400
+            service = _get_prediction_service()
+            result = service.predict(pred_req)
+        finally:
+            if image_file_handle:
+                image_file_handle.close()
 
         analysis = AIAnalysis(
             clinic_id=actor.clinic_id,

@@ -1,5 +1,5 @@
 from flask import request, jsonify
-from flask_jwt_extended import create_access_token, get_jwt_identity
+from flask_jwt_extended import create_access_token, get_jwt_identity, get_jwt
 from ..decorators.auth import jwt_required_custom, base_permissions_for_role
 from ..models_db.models import User
 
@@ -16,7 +16,10 @@ class AuthController:
         if not user or not user.check_password(password) or not user.is_active:
             return jsonify({"error": "Credenciais inválidas"}), 401
 
-        token = create_access_token(identity=str(user.id), additional_claims={"role": user.role.value, "clinic_id": user.clinic_id})
+        token = create_access_token(
+            identity=str(user.id),
+            additional_claims={"role": user.role.value, "clinic_id": user.clinic_id},
+        )
         return jsonify({
             "access_token": token,
             "user": {
@@ -46,4 +49,7 @@ class AuthController:
 
     @jwt_required_custom
     def logout(self):
+        from ..app import BLOCKLIST
+        jti = get_jwt()["jti"]
+        BLOCKLIST.add(jti)
         return jsonify({"message": "Logout realizado com sucesso"}), 200

@@ -13,14 +13,15 @@ class AppointmentController:
     def _interval(self, scheduled_at):
         return scheduled_at, scheduled_at + timedelta(minutes=self.SLOT_MINUTES)
 
-    def _overlap_filter(self, start_field, end_field, start, end):
-        return (start_field < end) & (end_field > start)
-
     def _has_conflict(self, clinic_id, doctor_profile_id, scheduled_at, exclude_id=None):
         start, end = self._interval(scheduled_at)
+        # Filtra no SQL pelo intervalo de data para evitar carregar tudo em memória
+        slot_start = start - timedelta(minutes=self.SLOT_MINUTES)
         query = Appointment.query.filter(
             Appointment.clinic_id == clinic_id,
             Appointment.doctor_profile_id == doctor_profile_id,
+            Appointment.scheduled_at >= slot_start,
+            Appointment.scheduled_at < end,
             Appointment.status.in_([
                 AppointmentStatus.SCHEDULED,
                 AppointmentStatus.CONFIRMED,
@@ -30,11 +31,7 @@ class AppointmentController:
         )
         if exclude_id:
             query = query.filter(Appointment.id != exclude_id)
-        for row in query.all():
-            row_start, row_end = self._interval(row.scheduled_at)
-            if row_start < end and row_end > start:
-                return True
-        return False
+        return query.first() is not None
 
     def _is_blocked(self, clinic_id, doctor_profile_id, scheduled_at):
         start, end = self._interval(scheduled_at)

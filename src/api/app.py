@@ -16,6 +16,10 @@ from .database.extensions import db, migrate, jwt
 from .seed.seed_data import run_seed
 
 
+# In-memory JWT blocklist (para invalidar tokens no logout)
+BLOCKLIST = set()
+
+
 def create_app(config: APIConfig = None) -> Flask:
     if config is None:
         config = APIConfig()
@@ -25,11 +29,22 @@ def create_app(config: APIConfig = None) -> Flask:
     app.config['MAX_CONTENT_LENGTH'] = config.MAX_FILE_SIZE
     app.config['SECRET_KEY'] = config.SECRET_KEY
     app.config['JWT_SECRET_KEY'] = config.JWT_SECRET_KEY
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = config.JWT_ACCESS_TOKEN_EXPIRES
     app.config['SQLALCHEMY_DATABASE_URI'] = config.DATABASE_URL
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     CORS(app, origins=config.CORS_ORIGINS)
-    Swagger(app, config={"headers": [], "specs": [{"endpoint": "apispec", "route": "/apispec.json", "rule_filter": lambda rule: True, "model_filter": lambda tag: True}], "swagger_ui": True, "specs_route": "/docs"})
+    Swagger(app, config={
+        "headers": [],
+        "specs": [{
+            "endpoint": "apispec",
+            "route": "/apispec.json",
+            "rule_filter": lambda rule: True,
+            "model_filter": lambda tag: True,
+        }],
+        "swagger_ui": True,
+        "specs_route": "/docs",
+    })
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -37,11 +52,30 @@ def create_app(config: APIConfig = None) -> Flask:
 
     from .models_db import models  # noqa: F401
 
+    # JWT blocklist check
+    @jwt.token_in_blocklist_loader
+    def check_if_token_revoked(jwt_header, jwt_payload):
+        jti = jwt_payload["jti"]
+        return jti in BLOCKLIST
+
+    # Error handlers
     @app.errorhandler(400)
     def handle_bad_request(error):
         return jsonify({"error": "Requisição inválida", "message": str(error)}), 400
 
+    @app.errorhandler(404)
+    def handle_not_found(error):
+        return jsonify({"error": "Não encontrado"}), 404
 
+    @app.errorhandler(413)
+    def handle_too_large(error):
+        return jsonify({"error": f"Arquivo muito grande. Máximo: {config.MAX_FILE_SIZE // (1024 * 1024)}MB"}), 413
+
+    @app.errorhandler(500)
+    def handle_internal(error):
+        return jsonify({"error": "Erro interno do servidor"}), 500
+
+    # Controllers
     prediction_controller = PredictionController()
     auth_controller = AuthController()
     admin_controller = AdminController()
@@ -52,14 +86,7 @@ def create_app(config: APIConfig = None) -> Flask:
     document_controller = DocumentController()
     ai_controller = AIController()
 
-    @app.route('/api/v1/predict', methods=['POST'])
-    def predict():
-        return prediction_controller.predict()
-
-    @app.route('/api/v1/health', methods=['GET'])
-    def health_check():
-        return prediction_controller.health()
-
+    # ── Auth ──
     @app.route('/api/v1/auth/login', methods=['POST'])
     def login():
         return auth_controller.login()
@@ -72,6 +99,16 @@ def create_app(config: APIConfig = None) -> Flask:
     def logout():
         return auth_controller.logout()
 
+    # ── Prediction (legacy standalone) ──
+    @app.route('/api/v1/predict', methods=['POST'])
+    def predict():
+        return prediction_controller.predict()
+
+    @app.route('/api/v1/health', methods=['GET'])
+    def health_check():
+        return prediction_controller.health()
+
+    # ── Admin ──
     @app.route('/api/v1/clinics', methods=['GET'])
     def list_clinics():
         return admin_controller.list_clinics()
@@ -92,7 +129,12 @@ def create_app(config: APIConfig = None) -> Flask:
     def list_audit_logs():
         return admin_controller.list_audit_logs()
 
+    # ── Dashboard ──
+    @app.route('/api/v1/dashboard', methods=['GET'])
+    def dashboard():
+        return admin_controller.dashboard()
 
+    # ── Patients ──
     @app.route('/api/v1/patients', methods=['POST'])
     def create_patient():
         return patient_controller.create_patient()
@@ -117,6 +159,7 @@ def create_app(config: APIConfig = None) -> Flask:
     def my_patients():
         return patient_controller.my_patients()
 
+    # ── Appointments ──
     @app.route('/api/v1/appointments', methods=['POST'])
     def create_appointment():
         return appointment_controller.create()
@@ -145,6 +188,7 @@ def create_app(config: APIConfig = None) -> Flask:
     def cancel_appointment(appointment_id):
         return appointment_controller.cancel(appointment_id)
 
+    # ── Schedule Blocks ──
     @app.route('/api/v1/schedule-blocks', methods=['POST'])
     def create_schedule_block():
         return schedule_block_controller.create()
@@ -157,11 +201,14 @@ def create_app(config: APIConfig = None) -> Flask:
     def delete_schedule_block(block_id):
         return schedule_block_controller.delete(block_id)
 
-
-
+    # ── Medical Records ──
     @app.route('/api/v1/medical-records', methods=['POST'])
     def create_medical_record():
         return medical_record_controller.create()
+
+    @app.route('/api/v1/medical-records', methods=['GET'])
+    def list_medical_records():
+        return medical_record_controller.list()
 
     @app.route('/api/v1/medical-records/<int:record_id>', methods=['GET'])
     def get_medical_record(record_id):
@@ -171,10 +218,12 @@ def create_app(config: APIConfig = None) -> Flask:
     def update_medical_record(record_id):
         return medical_record_controller.update(record_id)
 
+    # ── Documents ──
     @app.route('/api/v1/documents/upload', methods=['POST'])
     def upload_document():
         return document_controller.upload()
 
+    # ── AI ──
     @app.route('/api/v1/ai/analyze', methods=['POST'])
     def ai_analyze():
         return ai_controller.analyze()
@@ -183,6 +232,7 @@ def create_app(config: APIConfig = None) -> Flask:
     def ai_validate(analysis_id):
         return ai_controller.validate(analysis_id)
 
+    # ── CLI ──
     @app.cli.command("seed")
     def seed_command():
         run_seed()
