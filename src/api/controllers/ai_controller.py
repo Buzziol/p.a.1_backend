@@ -96,6 +96,8 @@ class AIController:
                 return jsonify({"error": "file ou document_id é obrigatório"}), 400
 
             service = _get_prediction_service()
+            if not service.is_model_loaded():
+                return jsonify({"error": "Modelo de IA não está disponível. Contate o administrador."}), 503
             result = service.predict(pred_req)
         finally:
             if image_file_handle:

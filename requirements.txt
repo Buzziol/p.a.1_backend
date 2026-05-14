@@ -13,3 +13,4 @@ Flask-SQLAlchemy
 Flask-Migrate
 Flask-JWT-Extended
 python-dotenv
+Flask-Limiter>=3.5.0

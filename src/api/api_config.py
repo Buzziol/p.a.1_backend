@@ -17,7 +17,7 @@ class APIConfig:
 
     # Diretórios
     BASE_DIR = Path(__file__).resolve().parent.parent.parent
-    MODELS_DIR = BASE_DIR / "models"
+    MODELS_DIR = BASE_DIR / "src" / "models"
     LOGS_DIR = BASE_DIR / "logs"
     MODEL_PATH = MODELS_DIR / "final_ensemble_model.keras"
 
@@ -59,8 +59,11 @@ class APIConfig:
 
     @classmethod
     def validate_config(cls):
-        if not cls.MODELS_DIR.exists():
-            raise FileNotFoundError(f"Diretório de modelos não encontrado: {cls.MODELS_DIR}")
+        cls.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        cls.LOGS_DIR.mkdir(parents=True, exist_ok=True)
         if not cls.MODEL_PATH.exists():
-            raise FileNotFoundError(f"Modelo não encontrado: {cls.MODEL_PATH}")
-        cls.LOGS_DIR.mkdir(exist_ok=True)
+            import logging
+            logging.getLogger("APIConfig").warning(
+                f"Modelo de IA não encontrado em: {cls.MODEL_PATH}. "
+                "O sistema iniciará sem o módulo de predição."
+            )

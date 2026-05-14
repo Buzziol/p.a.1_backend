@@ -192,3 +192,36 @@ class AIAnalysis(db.Model):
     doctor_final_assessment = db.Column(db.Text, nullable=True)
     doctor_notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+
+
+class RefreshToken(db.Model):
+    __tablename__ = "refresh_tokens"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    token = db.Column(db.String(512), unique=True, nullable=False, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    revoked = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+
+    user = db.relationship("User", backref=db.backref("refresh_tokens", lazy="dynamic"))
+
+    @classmethod
+    def create(cls, user_id: int, expires_in_days: int = 30) -> "RefreshToken":
+        import secrets
+        from datetime import datetime, timedelta
+        token = secrets.token_urlsafe(48)
+        rt = cls(
+            user_id=user_id,
+            token=token,
+            expires_at=datetime.utcnow() + timedelta(days=expires_in_days),
+        )
+        db.session.add(rt)
+        db.session.flush()
+        return rt
+
+    def is_valid(self) -> bool:
+        from datetime import datetime
+        return not self.revoked and self.expires_at > datetime.utcnow()
+
+    def revoke(self):
+        self.revoked = True
