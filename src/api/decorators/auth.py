@@ -21,6 +21,8 @@ def role_required(*allowed_roles):
             user = User.query.get(user_id)
             if not user:
                 return jsonify({"error": "Unauthorized"}), 401
+            if user.role == RoleEnum.SUPER_ADMIN:
+                return fn(*args, **kwargs)
             if user.role.value not in allowed_roles:
                 return jsonify({"error": "Forbidden"}), 403
             return fn(*args, **kwargs)

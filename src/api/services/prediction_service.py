@@ -35,14 +35,16 @@ class PredictionService:
         self._load_model()
 
     def _load_model(self):
-        """Carrega o modelo de predição."""
+        """Carrega o modelo de predição. Não levanta exceção — o app inicia mesmo sem modelo."""
         try:
             self.logger.info(f"Carregando modelo de: {self.config.MODEL_PATH}")
 
             if not self.config.MODEL_PATH.exists():
-                raise ModelNotLoadedException(
-                    f"Modelo não encontrado em: {self.config.MODEL_PATH}"
+                self.logger.warning(
+                    f"Modelo não encontrado em: {self.config.MODEL_PATH}. "
+                    "O módulo de IA ficará indisponível até que o modelo seja colocado no caminho correto."
                 )
+                return
 
             self.model = keras.models.load_model(str(self.config.MODEL_PATH))
             self.logger.info("Modelo carregado com sucesso")
@@ -50,8 +52,11 @@ class PredictionService:
             self.logger.info(f"   - Output shape: {self.model.output_shape}")
 
         except Exception as e:
-            self.logger.error(f"Erro ao carregar modelo: {str(e)}")
-            raise ModelNotLoadedException(f"Falha ao carregar modelo: {str(e)}")
+            self.logger.warning(
+                f"Erro ao carregar modelo: {str(e)}. "
+                "O módulo de IA ficará indisponível."
+            )
+            self.model = None
 
     def is_model_loaded(self):
         """Verifica se o modelo está carregado."""

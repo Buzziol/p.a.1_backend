@@ -1,6 +1,26 @@
+import json
 import logging
+import uuid
 from datetime import datetime
 from pathlib import Path
+
+
+class JSONFormatter(logging.Formatter):
+    """Formata logs como JSON estruturado para análise em ferramentas como Datadog/ELK."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        data = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+        if record.exc_info:
+            data["exception"] = self.formatException(record.exc_info)
+        return json.dumps(data, ensure_ascii=False)
 
 
 class APILogger:

@@ -24,7 +24,10 @@ class PredictionRequest:
 
         # Validar extensão
         from ..api_config import APIConfig
-        extension = self.image_file.filename.rsplit('.', 1)[1].lower()
+        parts = self.image_file.filename.rsplit('.', 1)
+        if len(parts) < 2:
+            return False, f"Arquivo sem extensão. Use: {', '.join(APIConfig.ALLOWED_EXTENSIONS)}"
+        extension = parts[1].lower()
         if extension not in APIConfig.ALLOWED_EXTENSIONS:
             return False, f"Formato de arquivo não suportado. Use: {', '.join(APIConfig.ALLOWED_EXTENSIONS)}"
 
