@@ -52,21 +52,29 @@ class AdminController:
         db.session.commit()
         return jsonify({"id": clinic.id, "name": clinic.name}), 201
 
-    @role_required("SUPER_ADMIN", "CLINIC_ADMIN")
+    @role_required("SUPER_ADMIN", "CLINIC_ADMIN", "RECEPTIONIST")
     def list_users(self):
         actor = User.query.get(int(get_jwt_identity()))
         query = User.query
-        if actor.role == RoleEnum.CLINIC_ADMIN:
+        if actor.role in (RoleEnum.CLINIC_ADMIN, RoleEnum.RECEPTIONIST):
             query = query.filter_by(clinic_id=actor.clinic_id)
         users = query.order_by(User.id.asc()).all()
-        return jsonify([{
-            "id": u.id,
-            "clinic_id": u.clinic_id,
-            "name": u.name,
-            "email": u.email,
-            "role": u.role.value,
-            "is_active": u.is_active,
-        } for u in users]), 200
+        result = []
+        for u in users:
+            row = {
+                "id": u.id,
+                "clinic_id": u.clinic_id,
+                "name": u.name,
+                "email": u.email,
+                "role": u.role.value,
+                "is_active": u.is_active,
+                "doctor_profile_id": None,
+            }
+            if u.role == RoleEnum.DOCTOR:
+                dp = DoctorProfile.query.filter_by(user_id=u.id).first()
+                row["doctor_profile_id"] = dp.id if dp else None
+            result.append(row)
+        return jsonify(result), 200
 
     @role_required("SUPER_ADMIN", "CLINIC_ADMIN")
     def create_user(self):
@@ -91,6 +99,8 @@ class AdminController:
             clinic_id = actor.clinic_id
             if role_enum == RoleEnum.SUPER_ADMIN:
                 return jsonify({"error": "Forbidden"}), 403
+        if role_enum != RoleEnum.SUPER_ADMIN and not clinic_id:
+            return jsonify({"error": "clinic_id obrigatório para usuários não SUPER_ADMIN"}), 400
 
         user = User(
             name=data["name"],

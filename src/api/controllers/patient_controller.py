@@ -2,9 +2,20 @@ from datetime import datetime
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
-from ..models_db.models import Patient, User, RoleEnum, DoctorProfile, Appointment
+from ..models_db.models import Patient, User, RoleEnum, DoctorProfile, Appointment, Clinic
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+
+
+def _resolve_clinic_id(actor, data=None):
+    if actor.clinic_id is not None:
+        return actor.clinic_id
+    if data:
+        cid = data.get("clinic_id")
+        if cid:
+            return int(cid)
+    clinic = Clinic.query.filter_by(is_active=True).first()
+    return clinic.id if clinic else None
 
 
 class PatientController:
@@ -18,10 +29,13 @@ class PatientController:
         missing = [k for k in required if not data.get(k)]
         if missing:
             return jsonify({"error": f"Campos obrigatórios ausentes: {', '.join(missing)}"}), 400
-        if Patient.query.filter_by(clinic_id=actor.clinic_id, cpf=data["cpf"]).first():
+        clinic_id = _resolve_clinic_id(actor, data)
+        if not clinic_id:
+            return jsonify({"error": "Nenhuma clínica disponível"}), 400
+        if Patient.query.filter_by(clinic_id=clinic_id, cpf=data["cpf"]).first():
             return jsonify({"error": "CPF já cadastrado nesta clínica"}), 409
         patient = Patient(
-            clinic_id=actor.clinic_id,
+            clinic_id=clinic_id,
             name=data["name"],
             cpf=data["cpf"],
             address=data["address"],
@@ -40,7 +54,9 @@ class PatientController:
     @role_required("CLINIC_ADMIN", "RECEPTIONIST", "DOCTOR")
     def list_patients(self):
         actor = User.query.get(int(get_jwt_identity()))
-        q = Patient.query.filter_by(clinic_id=actor.clinic_id, is_active=True)
+        q = Patient.query.filter_by(is_active=True)
+        if actor.clinic_id is not None:
+            q = q.filter_by(clinic_id=actor.clinic_id)
         search = request.args.get("search", "").strip()
         if search:
             q = q.filter(
@@ -72,7 +88,7 @@ class PatientController:
     def get_patient(self, patient_id):
         actor = User.query.get(int(get_jwt_identity()))
         p = Patient.query.get(patient_id)
-        if not p or p.clinic_id != actor.clinic_id:
+        if not p or (actor.clinic_id is not None and p.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         return jsonify({
             "id": p.id,
@@ -93,7 +109,7 @@ class PatientController:
     def update_patient(self, patient_id):
         actor = User.query.get(int(get_jwt_identity()))
         p = Patient.query.get(patient_id)
-        if not p or p.clinic_id != actor.clinic_id:
+        if not p or (actor.clinic_id is not None and p.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         data = get_json_body()
         if not data:
@@ -110,7 +126,7 @@ class PatientController:
     def delete_patient(self, patient_id):
         actor = User.query.get(int(get_jwt_identity()))
         p = Patient.query.get(patient_id)
-        if not p or p.clinic_id != actor.clinic_id:
+        if not p or (actor.clinic_id is not None and p.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         p.is_active = False
         db.session.commit()

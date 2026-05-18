@@ -209,3 +209,5 @@ __marimo__/
 # Related to out project
 .idea/
 assets/
+
+.passwords

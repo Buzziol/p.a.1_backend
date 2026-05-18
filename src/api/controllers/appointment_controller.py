@@ -2,9 +2,37 @@ from datetime import datetime, timedelta
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
-from ..models_db.models import Appointment, AppointmentStatus, User, RoleEnum, DoctorProfile, ScheduleBlock
+from ..models_db.models import Appointment, AppointmentStatus, User, RoleEnum, DoctorProfile, ScheduleBlock, Clinic, Patient
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+
+
+def _serialize_appointment(a: Appointment) -> dict:
+    dp = DoctorProfile.query.get(a.doctor_profile_id) if a.doctor_profile_id else None
+    doctor_user = User.query.get(dp.user_id) if dp else None
+    patient = Patient.query.get(a.patient_id) if a.patient_id else None
+    return {
+        "id": a.id,
+        "patient_id": a.patient_id,
+        "patient_name": patient.name if patient else None,
+        "doctor_profile_id": a.doctor_profile_id,
+        "doctor_id": doctor_user.id if doctor_user else None,
+        "doctor_name": doctor_user.name if doctor_user else None,
+        "scheduled_at": a.scheduled_at.isoformat(),
+        "status": a.status.value,
+        "notes": a.notes,
+    }
+
+
+def _resolve_clinic_id(actor, data=None):
+    if actor.clinic_id is not None:
+        return actor.clinic_id
+    if data:
+        cid = data.get("clinic_id")
+        if cid:
+            return int(cid)
+    clinic = Clinic.query.filter_by(is_active=True).first()
+    return clinic.id if clinic else None
 
 
 class AppointmentController:
@@ -61,12 +89,15 @@ class AppointmentController:
         required = ["patient_id", "doctor_profile_id", "scheduled_at"]
         if any(not data.get(k) for k in required):
             return jsonify({"error": "Campos obrigatórios ausentes"}), 400
+        clinic_id = _resolve_clinic_id(actor, data)
+        if not clinic_id:
+            return jsonify({"error": "Nenhuma clínica disponível"}), 400
         dt = datetime.fromisoformat(data["scheduled_at"])
-        if self._has_conflict(actor.clinic_id, data["doctor_profile_id"], dt):
+        if self._has_conflict(clinic_id, data["doctor_profile_id"], dt):
             return jsonify({"error": "Conflito de agenda"}), 409
-        if self._is_blocked(actor.clinic_id, data["doctor_profile_id"], dt):
+        if self._is_blocked(clinic_id, data["doctor_profile_id"], dt):
             return jsonify({"error": "Horário bloqueado"}), 409
-        ap = Appointment(clinic_id=actor.clinic_id, patient_id=data["patient_id"], doctor_profile_id=data["doctor_profile_id"], scheduled_at=dt, status=AppointmentStatus.SCHEDULED, notes=data.get("notes"), created_by=actor.id)
+        ap = Appointment(clinic_id=clinic_id, patient_id=data["patient_id"], doctor_profile_id=data["doctor_profile_id"], scheduled_at=dt, status=AppointmentStatus.SCHEDULED, notes=data.get("notes"), created_by=actor.id)
         db.session.add(ap)
         db.session.commit()
         return jsonify({"id": ap.id, "status": ap.status.value}), 201
@@ -74,7 +105,9 @@ class AppointmentController:
     @role_required("CLINIC_ADMIN", "RECEPTIONIST")
     def list(self):
         actor = User.query.get(int(get_jwt_identity()))
-        q = Appointment.query.filter_by(clinic_id=actor.clinic_id)
+        q = Appointment.query
+        if actor.clinic_id is not None:
+            q = q.filter_by(clinic_id=actor.clinic_id)
         date_filter = request.args.get("date")
         doctor_id = request.args.get("doctor_id", type=int)
         status = request.args.get("status")
@@ -89,7 +122,7 @@ class AppointmentController:
             except Exception:
                 return jsonify({"error": "status inválido"}), 400
         rows = q.order_by(Appointment.scheduled_at.desc()).all()
-        return jsonify([{"id": a.id, "patient_id": a.patient_id, "doctor_profile_id": a.doctor_profile_id, "scheduled_at": a.scheduled_at.isoformat(), "status": a.status.value} for a in rows]), 200
+        return jsonify([_serialize_appointment(a) for a in rows]), 200
 
     @role_required("DOCTOR")
     def doctor_list(self):
@@ -97,8 +130,11 @@ class AppointmentController:
         dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         if not dp:
             return jsonify([]), 200
-        rows = Appointment.query.filter_by(clinic_id=actor.clinic_id, doctor_profile_id=dp.id).order_by(Appointment.scheduled_at.desc()).all()
-        return jsonify([{"id": a.id, "patient_id": a.patient_id, "scheduled_at": a.scheduled_at.isoformat(), "status": a.status.value} for a in rows]), 200
+        q = Appointment.query.filter_by(doctor_profile_id=dp.id)
+        if actor.clinic_id is not None:
+            q = q.filter_by(clinic_id=actor.clinic_id)
+        rows = q.order_by(Appointment.scheduled_at.desc()).all()
+        return jsonify([_serialize_appointment(a) for a in rows]), 200
 
     @role_required("DOCTOR")
     def doctor_day(self):
@@ -110,13 +146,15 @@ class AppointmentController:
         if not date_str:
             return jsonify({"error": "date é obrigatório (YYYY-MM-DD)"}), 400
         day = datetime.fromisoformat(date_str)
-        rows = Appointment.query.filter(
-            Appointment.clinic_id == actor.clinic_id,
+        q = Appointment.query.filter(
             Appointment.doctor_profile_id == dp.id,
             Appointment.scheduled_at >= day,
             Appointment.scheduled_at < day + timedelta(days=1),
-        ).order_by(Appointment.scheduled_at.asc()).all()
-        return jsonify([{"id": a.id, "patient_id": a.patient_id, "scheduled_at": a.scheduled_at.isoformat(), "status": a.status.value} for a in rows]), 200
+        )
+        if actor.clinic_id is not None:
+            q = q.filter(Appointment.clinic_id == actor.clinic_id)
+        rows = q.order_by(Appointment.scheduled_at.asc()).all()
+        return jsonify([_serialize_appointment(a) for a in rows]), 200
 
     @role_required("CLINIC_ADMIN", "RECEPTIONIST", "DOCTOR")
     def update_status(self, appointment_id):
@@ -145,7 +183,7 @@ class AppointmentController:
     def reschedule(self, appointment_id):
         actor = User.query.get(int(get_jwt_identity()))
         ap = Appointment.query.get(appointment_id)
-        if not ap or ap.clinic_id != actor.clinic_id:
+        if not ap or (actor.clinic_id is not None and ap.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         data = get_json_body()
         if not data:
@@ -164,7 +202,7 @@ class AppointmentController:
     def cancel(self, appointment_id):
         actor = User.query.get(int(get_jwt_identity()))
         ap = Appointment.query.get(appointment_id)
-        if not ap or ap.clinic_id != actor.clinic_id:
+        if not ap or (actor.clinic_id is not None and ap.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         ap.status = AppointmentStatus.CANCELLED
         db.session.commit()

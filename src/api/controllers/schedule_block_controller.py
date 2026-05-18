@@ -2,9 +2,20 @@ from datetime import datetime, timedelta
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
-from ..models_db.models import ScheduleBlock, User, RoleEnum, DoctorProfile, Appointment, AppointmentStatus
+from ..models_db.models import ScheduleBlock, User, RoleEnum, DoctorProfile, Appointment, AppointmentStatus, Clinic
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+
+
+def _resolve_clinic_id(actor, data=None):
+    if actor.clinic_id is not None:
+        return actor.clinic_id
+    if data:
+        cid = data.get("clinic_id")
+        if cid:
+            return int(cid)
+    clinic = Clinic.query.filter_by(is_active=True).first()
+    return clinic.id if clinic else None
 
 
 class ScheduleBlockController:
@@ -44,15 +55,18 @@ class ScheduleBlockController:
             doctor_profile_id = dp.id if dp else None
         if not doctor_profile_id:
             return jsonify({"error": "doctor_profile_id obrigatório"}), 400
+        clinic_id = _resolve_clinic_id(actor, data)
+        if not clinic_id:
+            return jsonify({"error": "Nenhuma clínica disponível"}), 400
         start = datetime.fromisoformat(data["start_time"])
         end = datetime.fromisoformat(data["end_time"])
         if end <= start:
             return jsonify({"error": "Intervalo inválido"}), 400
-        if self._has_block_overlap(actor.clinic_id, doctor_profile_id, start, end):
+        if self._has_block_overlap(clinic_id, doctor_profile_id, start, end):
             return jsonify({"error": "Conflito com bloqueio existente"}), 409
-        if self._has_appointment_overlap(actor.clinic_id, doctor_profile_id, start, end):
+        if self._has_appointment_overlap(clinic_id, doctor_profile_id, start, end):
             return jsonify({"error": "Conflito com consulta existente"}), 409
-        block = ScheduleBlock(clinic_id=actor.clinic_id, doctor_profile_id=doctor_profile_id, start_time=start, end_time=end, reason=data.get("reason"))
+        block = ScheduleBlock(clinic_id=clinic_id, doctor_profile_id=doctor_profile_id, start_time=start, end_time=end, reason=data.get("reason"))
         db.session.add(block)
         db.session.commit()
         return jsonify({"id": block.id}), 201
@@ -60,7 +74,9 @@ class ScheduleBlockController:
     @role_required("DOCTOR", "CLINIC_ADMIN")
     def list(self):
         actor = User.query.get(int(get_jwt_identity()))
-        q = ScheduleBlock.query.filter_by(clinic_id=actor.clinic_id)
+        q = ScheduleBlock.query
+        if actor.clinic_id is not None:
+            q = q.filter_by(clinic_id=actor.clinic_id)
         if actor.role == RoleEnum.DOCTOR:
             dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
             if not dp:
@@ -73,7 +89,7 @@ class ScheduleBlockController:
     def delete(self, block_id):
         actor = User.query.get(int(get_jwt_identity()))
         b = ScheduleBlock.query.get(block_id)
-        if not b or b.clinic_id != actor.clinic_id:
+        if not b or (actor.clinic_id is not None and b.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         if actor.role == RoleEnum.DOCTOR:
             dp = DoctorProfile.query.filter_by(user_id=actor.id).first()

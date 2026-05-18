@@ -49,7 +49,7 @@ class AIController:
         if not medical_record_id:
             return jsonify({"error": "medical_record_id é obrigatório"}), 400
         mr = MedicalRecord.query.get(int(medical_record_id))
-        if not mr or mr.clinic_id != actor.clinic_id:
+        if not mr or (actor.clinic_id is not None and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Prontuário não encontrado"}), 404
         if mr.doctor_profile_id != dp.id:
             return jsonify({"error": "Forbidden"}), 403
@@ -77,7 +77,7 @@ class AIController:
                 path = self.STORAGE_DIR / f"{mr.id}_{filename}"
                 file.save(path)
                 doc = Document(
-                    clinic_id=actor.clinic_id,
+                    clinic_id=actor.clinic_id or mr.clinic_id,
                     medical_record_id=mr.id,
                     file_path=str(path),
                     file_type=file.mimetype or "application/octet-stream",
@@ -104,7 +104,7 @@ class AIController:
                 image_file_handle.close()
 
         analysis = AIAnalysis(
-            clinic_id=actor.clinic_id,
+            clinic_id=actor.clinic_id or mr.clinic_id,
             medical_record_id=mr.id,
             document_id=doc.id,
             ai_diagnosis=result.diagnosis,
@@ -130,7 +130,7 @@ class AIController:
         actor = User.query.get(int(get_jwt_identity()))
         dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         analysis = AIAnalysis.query.get(analysis_id)
-        if not analysis or analysis.clinic_id != actor.clinic_id:
+        if not analysis or (actor.clinic_id is not None and analysis.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         mr = MedicalRecord.query.get(analysis.medical_record_id)
         if not dp or not mr or mr.doctor_profile_id != dp.id:

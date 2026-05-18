@@ -3,7 +3,18 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
-from ..models_db.models import MedicalRecord, User, RoleEnum, DoctorProfile, Patient
+from ..models_db.models import MedicalRecord, User, RoleEnum, DoctorProfile, Patient, Clinic
+
+
+def _resolve_clinic_id(actor, data=None):
+    if actor.clinic_id is not None:
+        return actor.clinic_id
+    if data:
+        cid = data.get("clinic_id")
+        if cid:
+            return int(cid)
+    clinic = Clinic.query.filter_by(is_active=True).first()
+    return clinic.id if clinic else None
 
 
 class MedicalRecordController:
@@ -19,8 +30,11 @@ class MedicalRecordController:
         required = ["patient_id", "appointment_id"]
         if any(not data.get(k) for k in required):
             return jsonify({"error": "patient_id e appointment_id são obrigatórios"}), 400
+        clinic_id = _resolve_clinic_id(actor, data)
+        if not clinic_id:
+            return jsonify({"error": "Nenhuma clínica disponível"}), 400
         mr = MedicalRecord(
-            clinic_id=actor.clinic_id,
+            clinic_id=clinic_id,
             patient_id=data["patient_id"],
             doctor_profile_id=dp.id,
             appointment_id=data["appointment_id"],
@@ -40,7 +54,9 @@ class MedicalRecordController:
     @role_required("DOCTOR", "CLINIC_ADMIN")
     def list(self):
         actor = User.query.get(int(get_jwt_identity()))
-        q = MedicalRecord.query.filter_by(clinic_id=actor.clinic_id)
+        q = MedicalRecord.query
+        if actor.clinic_id is not None:
+            q = q.filter_by(clinic_id=actor.clinic_id)
         if actor.role == RoleEnum.DOCTOR:
             dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
             if not dp:
@@ -97,7 +113,7 @@ class MedicalRecordController:
         actor = User.query.get(int(get_jwt_identity()))
         dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         mr = MedicalRecord.query.get(record_id)
-        if not mr or mr.clinic_id != actor.clinic_id:
+        if not mr or (actor.clinic_id is not None and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         if not dp or mr.doctor_profile_id != dp.id:
             return jsonify({"error": "Forbidden"}), 403
