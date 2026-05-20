@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
@@ -7,7 +8,7 @@ from werkzeug.utils import secure_filename
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
-from ..models_db.models import AIAnalysis, Document, MedicalRecord, User, DoctorProfile, DoctorAgreementEnum
+from ..models_db.models import AIAnalysis, Document, MedicalRecord, User, DoctorProfile, DoctorAgreementEnum, RoleEnum
 from ..services.prediction_service import PredictionService
 from ..api_config import APIConfig
 from ..models.prediction_request import PredictionRequest
@@ -24,6 +25,40 @@ def _get_prediction_service():
     return _prediction_service
 
 
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt):
+    if not dt:
+        return None
+    return dt.isoformat() + ("Z" if dt.tzinfo is None else "")
+
+
+def serialize_ai_analysis(analysis, include_validation=True):
+    data = {
+        "id": analysis.id,
+        "medical_record_id": analysis.medical_record_id,
+        "document_id": analysis.document_id,
+        "ai_diagnosis": analysis.ai_diagnosis,
+        "probability": round(float(analysis.probability), 4),
+        "confidence_level": analysis.confidence_level,
+        "recommendation": analysis.recommendation,
+        "model_version": analysis.model_version,
+        "disclaimer": analysis.disclaimer,
+        "created_at": _iso(analysis.created_at),
+    }
+    if include_validation:
+        data.update({
+            "doctor_agreement": analysis.doctor_agreement.value if analysis.doctor_agreement else None,
+            "doctor_final_assessment": analysis.doctor_final_assessment,
+            "doctor_notes": analysis.doctor_notes,
+            "validated_at": _iso(analysis.validated_at),
+            "updated_at": _iso(analysis.updated_at),
+        })
+    return data
+
+
 class AIController:
     DISCLAIMER = "Este resultado é apenas uma sugestão baseada em inteligência artificial e não substitui avaliação médica profissional."
     STORAGE_DIR = Path("storage") / "documents"
@@ -31,6 +66,8 @@ class AIController:
     @role_required("DOCTOR")
     def analyze(self):
         actor = User.query.get(int(get_jwt_identity()))
+        if actor.role != RoleEnum.DOCTOR:
+            return jsonify({"error": "Forbidden"}), 403
         dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         if not dp:
             return jsonify({"error": "Doctor profile não encontrado"}), 400
@@ -48,7 +85,13 @@ class AIController:
 
         if not medical_record_id:
             return jsonify({"error": "medical_record_id é obrigatório"}), 400
-        mr = MedicalRecord.query.get(int(medical_record_id))
+        try:
+            medical_record_id = int(medical_record_id)
+            document_id = int(document_id) if document_id else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "medical_record_id e document_id devem ser inteiros"}), 400
+
+        mr = MedicalRecord.query.get(medical_record_id)
         if not mr or (actor.clinic_id is not None and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Prontuário não encontrado"}), 404
         if mr.doctor_profile_id != dp.id:
@@ -59,8 +102,8 @@ class AIController:
 
         try:
             if document_id:
-                doc = Document.query.get(int(document_id))
-                if not doc or doc.medical_record_id != mr.id:
+                doc = Document.query.get(document_id)
+                if not doc or doc.medical_record_id != mr.id or doc.clinic_id != mr.clinic_id:
                     return jsonify({"error": "Documento inválido"}), 404
                 image_file_handle = open(doc.file_path, "rb")
                 wrapped = type("F", (), {
@@ -112,22 +155,17 @@ class AIController:
             confidence_level=result.confidence_level,
             recommendation=result.recommendation,
             model_version=result.model_version,
+            disclaimer=self.DISCLAIMER,
         )
         db.session.add(analysis)
         db.session.commit()
-        return jsonify({
-            "id": analysis.id,
-            "ai_diagnosis": analysis.ai_diagnosis,
-            "probability": analysis.probability,
-            "confidence_level": analysis.confidence_level,
-            "recommendation": analysis.recommendation,
-            "model_version": analysis.model_version,
-            "disclaimer": self.DISCLAIMER,
-        }), 201
+        return jsonify(serialize_ai_analysis(analysis, include_validation=False)), 201
 
     @role_required("DOCTOR")
     def validate(self, analysis_id):
         actor = User.query.get(int(get_jwt_identity()))
+        if actor.role != RoleEnum.DOCTOR:
+            return jsonify({"error": "Forbidden"}), 403
         dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         analysis = AIAnalysis.query.get(analysis_id)
         if not analysis or (actor.clinic_id is not None and analysis.clinic_id != actor.clinic_id):
@@ -139,10 +177,13 @@ class AIController:
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
         try:
+            if not data.get("doctor_agreement"):
+                return jsonify({"error": "doctor_agreement e obrigatorio", "allowed_values": ["YES", "NO", "PARTIAL"]}), 400
             analysis.doctor_agreement = DoctorAgreementEnum(data.get("doctor_agreement"))
         except Exception:
-            return jsonify({"error": "doctor_agreement inválido"}), 400
+            return jsonify({"error": "doctor_agreement invalido", "allowed_values": ["YES", "NO", "PARTIAL"]}), 400
         analysis.doctor_final_assessment = data.get("doctor_final_assessment")
         analysis.doctor_notes = data.get("doctor_notes")
+        analysis.validated_at = _utcnow()
         db.session.commit()
-        return jsonify({"id": analysis.id, "doctor_agreement": analysis.doctor_agreement.value}), 200
+        return jsonify(serialize_ai_analysis(analysis)), 200

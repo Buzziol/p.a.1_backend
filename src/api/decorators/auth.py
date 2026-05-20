@@ -1,5 +1,5 @@
 from functools import wraps
-from flask import jsonify
+from flask import jsonify, request
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 from ..models_db.models import User, RoleEnum
 
@@ -7,6 +7,8 @@ from ..models_db.models import User, RoleEnum
 def jwt_required_custom(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        if request.method == "OPTIONS":
+            return "", 204
         verify_jwt_in_request()
         return fn(*args, **kwargs)
     return wrapper
@@ -16,6 +18,8 @@ def role_required(*allowed_roles):
     def deco(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            if request.method == "OPTIONS":
+                return "", 204
             verify_jwt_in_request()
             user_id = int(get_jwt_identity())
             user = User.query.get(user_id)

@@ -3,7 +3,8 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
-from ..models_db.models import MedicalRecord, User, RoleEnum, DoctorProfile, Patient, Clinic
+from ..models_db.models import MedicalRecord, User, RoleEnum, DoctorProfile, Patient, Clinic, AIAnalysis
+from .ai_controller import serialize_ai_analysis
 
 
 def _resolve_clinic_id(actor, data=None):
@@ -80,6 +81,32 @@ class MedicalRecordController:
         return jsonify({"items": items, "total": len(items)}), 200
 
     @role_required("DOCTOR", "CLINIC_ADMIN")
+    def list_by_patient(self, patient_id):
+        actor = User.query.get(int(get_jwt_identity()))
+        patient = Patient.query.get(patient_id)
+        if not patient or (actor.role != RoleEnum.SUPER_ADMIN and patient.clinic_id != actor.clinic_id):
+            return jsonify({"error": "Not found"}), 404
+
+        q = MedicalRecord.query.filter_by(patient_id=patient_id)
+        if actor.role != RoleEnum.SUPER_ADMIN:
+            q = q.filter_by(clinic_id=actor.clinic_id)
+        if actor.role == RoleEnum.DOCTOR:
+            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+            if not dp:
+                return jsonify([]), 200
+            q = q.filter_by(doctor_profile_id=dp.id)
+
+        records = q.order_by(MedicalRecord.id.desc()).all()
+        return jsonify([{
+            "id": mr.id,
+            "patient_id": mr.patient_id,
+            "appointment_id": mr.appointment_id,
+            "doctor_profile_id": mr.doctor_profile_id,
+            "diagnosis": mr.diagnosis,
+            "created_at": mr.created_at.isoformat() + "Z" if mr.created_at else None,
+        } for mr in records]), 200
+
+    @role_required("DOCTOR", "CLINIC_ADMIN")
     def get(self, record_id):
         actor = User.query.get(int(get_jwt_identity()))
         mr = MedicalRecord.query.get(record_id)
@@ -90,6 +117,12 @@ class MedicalRecordController:
             if not dp or mr.doctor_profile_id != dp.id:
                 return jsonify({"error": "Forbidden"}), 403
         patient = Patient.query.get(mr.patient_id)
+        analyses = (
+            AIAnalysis.query
+            .filter_by(clinic_id=mr.clinic_id, medical_record_id=mr.id)
+            .order_by(AIAnalysis.created_at.desc(), AIAnalysis.id.desc())
+            .all()
+        )
         return jsonify({
             "id": mr.id,
             "clinic_id": mr.clinic_id,
@@ -105,8 +138,28 @@ class MedicalRecordController:
             "prescriptions": mr.prescriptions,
             "exams_requested": mr.exams_requested,
             "evolution": mr.evolution,
+            "ai_analyses": [serialize_ai_analysis(analysis) for analysis in analyses],
             "created_at": mr.created_at.isoformat() + "Z" if mr.created_at else None,
         }), 200
+
+    @role_required("DOCTOR", "CLINIC_ADMIN")
+    def ai_analyses(self, medical_record_id):
+        actor = User.query.get(int(get_jwt_identity()))
+        mr = MedicalRecord.query.get(medical_record_id)
+        if not mr or (actor.role != RoleEnum.SUPER_ADMIN and mr.clinic_id != actor.clinic_id):
+            return jsonify({"error": "Not found"}), 404
+        if actor.role == RoleEnum.DOCTOR:
+            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+            if not dp or mr.doctor_profile_id != dp.id:
+                return jsonify({"error": "Forbidden"}), 403
+
+        analyses = (
+            AIAnalysis.query
+            .filter_by(clinic_id=mr.clinic_id, medical_record_id=mr.id)
+            .order_by(AIAnalysis.created_at.desc(), AIAnalysis.id.desc())
+            .all()
+        )
+        return jsonify([serialize_ai_analysis(analysis) for analysis in analyses]), 200
 
     @role_required("DOCTOR")
     def update(self, record_id):

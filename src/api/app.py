@@ -37,7 +37,13 @@ def create_app(config: APIConfig = None) -> Flask:
     app.config['SQLALCHEMY_DATABASE_URI'] = config.DATABASE_URL
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    CORS(app, origins=config.CORS_ORIGINS)
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": config.CORS_ORIGINS}},
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+        supports_credentials=False,
+    )
 
     limiter = Limiter(
         get_remote_address,
@@ -111,6 +117,22 @@ def create_app(config: APIConfig = None) -> Flask:
         jti = jwt_payload["jti"]
         return jti in BLOCKLIST
 
+    @jwt.unauthorized_loader
+    def handle_missing_token(reason):
+        return jsonify({"error": "Token de acesso ausente", "code": "UNAUTHORIZED", "message": reason}), 401
+
+    @jwt.invalid_token_loader
+    def handle_invalid_token(reason):
+        return jsonify({"error": "Token de acesso inválido", "code": "UNAUTHORIZED", "message": reason}), 401
+
+    @jwt.expired_token_loader
+    def handle_expired_token(jwt_header, jwt_payload):
+        return jsonify({"error": "Token de acesso expirado", "code": "UNAUTHORIZED"}), 401
+
+    @jwt.revoked_token_loader
+    def handle_revoked_token(jwt_header, jwt_payload):
+        return jsonify({"error": "Token de acesso revogado", "code": "UNAUTHORIZED"}), 401
+
     # Error handlers
     @app.errorhandler(400)
     def handle_bad_request(error):
@@ -119,6 +141,10 @@ def create_app(config: APIConfig = None) -> Flask:
     @app.errorhandler(404)
     def handle_not_found(error):
         return jsonify({"error": "Não encontrado", "code": "NOT_FOUND"}), 404
+
+    @app.errorhandler(405)
+    def handle_method_not_allowed(error):
+        return jsonify({"error": "Metodo nao permitido", "code": "METHOD_NOT_ALLOWED"}), 405
 
     @app.errorhandler(413)
     def handle_too_large(error):
@@ -493,6 +519,32 @@ def create_app(config: APIConfig = None) -> Flask:
             description: Acesso negado (somente DOCTOR)
         """
         return patient_controller.my_patients()
+
+    @app.route('/api/v1/patients/<int:patient_id>/medical-records', methods=['GET', 'OPTIONS'])
+    def list_patient_medical_records(patient_id):
+        """
+        Listar prontuários de um paciente (DOCTOR, CLINIC_ADMIN, SUPER_ADMIN)
+        ---
+        tags:
+          - Medical Records
+        security:
+          - Bearer: []
+        parameters:
+          - in: path
+            name: patient_id
+            type: integer
+            required: true
+        responses:
+          200:
+            description: Lista de prontuários do paciente
+          403:
+            description: Acesso negado
+          404:
+            description: Paciente não encontrado
+        """
+        if request.method == "OPTIONS":
+            return "", 204
+        return medical_record_controller.list_by_patient(patient_id)
 
     @app.route('/api/v1/patients/<int:patient_id>', methods=['GET'])
     def get_patient(patient_id):
@@ -888,6 +940,48 @@ def create_app(config: APIConfig = None) -> Flask:
         """
         return medical_record_controller.get(record_id)
 
+    @app.route('/api/v1/medical-records/<int:medical_record_id>/ai-analyses', methods=['GET', 'OPTIONS'])
+    def list_medical_record_ai_analyses(medical_record_id):
+        """
+        Listar historico de analises de IA do prontuario (DOCTOR, CLINIC_ADMIN)
+        ---
+        tags:
+          - AI Analysis
+          - Medical Records
+        security:
+          - Bearer: []
+        parameters:
+          - in: path
+            name: medical_record_id
+            type: integer
+            required: true
+        responses:
+          200:
+            description: Historico de analises de IA
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: {type: integer}
+                  ai_diagnosis: {type: string, enum: [benign, malignant]}
+                  probability: {type: number, format: float}
+                  confidence_level: {type: string, enum: [high, medium, low]}
+                  recommendation: {type: string}
+                  doctor_agreement: {type: string, enum: [YES, NO, PARTIAL]}
+                  doctor_final_assessment: {type: string}
+                  doctor_notes: {type: string}
+                  validated_at: {type: string, format: date-time}
+                  created_at: {type: string, format: date-time}
+          403:
+            description: Acesso negado
+          404:
+            description: Prontuario nao encontrado
+        """
+        if request.method == "OPTIONS":
+            return "", 204
+        return medical_record_controller.ai_analyses(medical_record_id)
+
     @app.route('/api/v1/medical-records/<int:record_id>', methods=['PUT'])
     def update_medical_record(record_id):
         """
@@ -984,6 +1078,8 @@ def create_app(config: APIConfig = None) -> Flask:
               type: object
               properties:
                 id: {type: integer}
+                medical_record_id: {type: integer}
+                document_id: {type: integer}
                 ai_diagnosis: {type: string, enum: [benign, malignant]}
                 probability: {type: number, format: float}
                 confidence_level: {type: string, enum: [high, medium, low]}
@@ -1022,7 +1118,7 @@ def create_app(config: APIConfig = None) -> Flask:
               properties:
                 doctor_agreement:
                   type: string
-                  enum: [AGREE, DISAGREE, PARTIALLY_AGREE]
+                  enum: [YES, NO, PARTIAL]
                 doctor_final_assessment: {type: string}
                 doctor_notes: {type: string}
         responses:
@@ -1038,6 +1134,11 @@ def create_app(config: APIConfig = None) -> Flask:
     def seed_command():
         run_seed()
         print("Seed executado com sucesso")
+
+    # ── Auto seed usuários padrão ──
+    with app.app_context():
+        db.create_all()
+        run_seed()
 
     return app
 

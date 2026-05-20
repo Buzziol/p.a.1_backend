@@ -1,7 +1,12 @@
 import enum
+from datetime import datetime, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from ..database.extensions import db
 from .base import TimestampMixin
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class RoleEnum(str, enum.Enum):
@@ -159,6 +164,12 @@ class MedicalRecord(TimestampMixin, db.Model):
     prescriptions = db.Column(db.Text, nullable=False, default="")
     exams_requested = db.Column(db.Text, nullable=False, default="")
     evolution = db.Column(db.Text, nullable=False, default="")
+    ai_analyses = db.relationship(
+        "AIAnalysis",
+        back_populates="medical_record",
+        lazy="dynamic",
+        cascade="all, delete-orphan",
+    )
 
 
 class Document(db.Model):
@@ -188,10 +199,16 @@ class AIAnalysis(db.Model):
     confidence_level = db.Column(db.String(32), nullable=False)
     recommendation = db.Column(db.Text, nullable=False)
     model_version = db.Column(db.String(64), nullable=False)
+    disclaimer = db.Column(db.Text, nullable=False)
     doctor_agreement = db.Column(db.Enum(DoctorAgreementEnum), nullable=True)
     doctor_final_assessment = db.Column(db.Text, nullable=True)
     doctor_notes = db.Column(db.Text, nullable=True)
+    validated_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    medical_record = db.relationship("MedicalRecord", back_populates="ai_analyses")
+    document = db.relationship("Document")
 
 
 class RefreshToken(db.Model):
