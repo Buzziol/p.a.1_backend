@@ -4,10 +4,86 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required, jwt_required_custom
 from ..models_db.models import (
     Clinic, User, RoleEnum, AuditLog, Patient, Appointment,
-    AppointmentStatus, MedicalRecord, DoctorProfile,
+    AppointmentStatus, DoctorProfile,
 )
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+
+
+TODAY_STATUSES = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.CONFIRMED,
+    AppointmentStatus.IN_PROGRESS,
+)
+SCHEDULED_STATUSES = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.CONFIRMED,
+)
+WEEKLY_STATUSES = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.CONFIRMED,
+    AppointmentStatus.IN_PROGRESS,
+    AppointmentStatus.COMPLETED,
+)
+WEEKDAY_LABELS = ("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
+
+
+def _today():
+    return datetime.now(timezone.utc).date()
+
+
+def _empty_dashboard():
+    return {
+        "active_clinics": 0,
+        "active_users": 0,
+        "total_patients": 0,
+        "appointments_today": 0,
+        "appointments_scheduled": 0,
+        "completed_month": 0,
+        "my_appointments_today": 0,
+        "weekly_appointments": _empty_weekly_appointments(),
+    }
+
+
+def _empty_weekly_appointments():
+    return [{"day": day, "count": 0} for day in WEEKDAY_LABELS]
+
+
+def _date_filter(query, column, target_date):
+    return query.filter(db.func.date(column) == target_date.isoformat())
+
+
+def _month_filter(query, column, target_date):
+    return query.filter(
+        db.extract("year", column) == target_date.year,
+        db.extract("month", column) == target_date.month,
+    )
+
+
+def _week_bounds(target_date):
+    week_start = target_date - timedelta(days=target_date.weekday())
+    return week_start, week_start + timedelta(days=6)
+
+
+def _weekly_appointments(query, target_date):
+    week_start, week_end = _week_bounds(target_date)
+    rows = query.filter(
+        Appointment.status.in_(WEEKLY_STATUSES),
+        db.func.date(Appointment.scheduled_at) >= week_start.isoformat(),
+        db.func.date(Appointment.scheduled_at) <= week_end.isoformat(),
+    ).with_entities(Appointment.scheduled_at).all()
+
+    counts_by_date = {week_start + timedelta(days=i): 0 for i in range(7)}
+    for row in rows:
+        scheduled_at = row.scheduled_at
+        scheduled_date = scheduled_at.date() if scheduled_at else None
+        if scheduled_date in counts_by_date:
+            counts_by_date[scheduled_date] += 1
+
+    return [
+        {"day": WEEKDAY_LABELS[i], "count": int(counts_by_date[week_start + timedelta(days=i)])}
+        for i in range(7)
+    ]
 
 
 class AdminController:
@@ -157,44 +233,55 @@ class AdminController:
     def dashboard(self):
         """Retorna métricas para o dashboard baseado no role do usuário."""
         actor = User.query.get(int(get_jwt_identity()))
-        now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = today_start + timedelta(days=1)
+        target_date = _today()
+        result = _empty_dashboard()
 
-        result = {}
+        appointment_query = Appointment.query
+        patient_query = Patient.query.filter(Patient.is_active.is_(True))
 
         if actor.role == RoleEnum.SUPER_ADMIN:
-            result["total_clinics"] = Clinic.query.filter_by(is_active=True).count()
-            result["total_users"] = User.query.filter_by(is_active=True).count()
-            result["total_patients"] = Patient.query.filter_by(is_active=True).count()
+            result["active_clinics"] = Clinic.query.filter(Clinic.is_active.is_(True)).count()
+            result["active_users"] = User.query.filter(User.is_active.is_(True)).count()
         else:
             clinic_id = actor.clinic_id
-            result["total_patients"] = Patient.query.filter_by(
-                clinic_id=clinic_id, is_active=True
-            ).count()
-            result["appointments_today"] = Appointment.query.filter(
-                Appointment.clinic_id == clinic_id,
-                Appointment.scheduled_at >= today_start,
-                Appointment.scheduled_at < today_end,
-                Appointment.status.notin_([AppointmentStatus.CANCELLED]),
-            ).count()
-            result["appointments_scheduled"] = Appointment.query.filter(
-                Appointment.clinic_id == clinic_id,
-                Appointment.status == AppointmentStatus.SCHEDULED,
-            ).count()
-            result["recent_records"] = MedicalRecord.query.filter_by(
-                clinic_id=clinic_id,
-            ).order_by(MedicalRecord.id.desc()).limit(5).count()
+            appointment_query = appointment_query.filter(Appointment.clinic_id == clinic_id)
+            patient_query = patient_query.filter(Patient.clinic_id == clinic_id)
+            if actor.role == RoleEnum.DOCTOR:
+                dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+                if dp:
+                    appointment_query = appointment_query.filter(Appointment.doctor_profile_id == dp.id)
+                    patient_query = Patient.query.join(
+                        Appointment,
+                        Patient.id == Appointment.patient_id,
+                    ).filter(
+                        Patient.is_active.is_(True),
+                        Appointment.doctor_profile_id == dp.id,
+                    )
+                    if actor.clinic_id is not None:
+                        patient_query = patient_query.filter(Patient.clinic_id == actor.clinic_id)
+                else:
+                    appointment_query = appointment_query.filter(False)
+                    patient_query = patient_query.filter(False)
+
+        result["total_patients"] = patient_query.with_entities(
+            db.func.count(db.distinct(Patient.id))
+        ).scalar() or 0
+        result["appointments_today"] = _date_filter(
+            appointment_query.filter(Appointment.status.in_(TODAY_STATUSES)),
+            Appointment.scheduled_at,
+            target_date,
+        ).count()
+        result["appointments_scheduled"] = appointment_query.filter(
+            Appointment.status.in_(SCHEDULED_STATUSES),
+        ).count()
+        result["completed_month"] = _month_filter(
+            appointment_query.filter(Appointment.status == AppointmentStatus.COMPLETED),
+            Appointment.scheduled_at,
+            target_date,
+        ).count()
+        result["weekly_appointments"] = _weekly_appointments(appointment_query, target_date)
 
         if actor.role == RoleEnum.DOCTOR:
-            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
-            if dp:
-                result["my_appointments_today"] = Appointment.query.filter(
-                    Appointment.clinic_id == actor.clinic_id,
-                    Appointment.doctor_profile_id == dp.id,
-                    Appointment.scheduled_at >= today_start,
-                    Appointment.scheduled_at < today_end,
-                    Appointment.status.notin_([AppointmentStatus.CANCELLED]),
-                ).count()
+            result["my_appointments_today"] = result["appointments_today"]
 
         return jsonify(result), 200

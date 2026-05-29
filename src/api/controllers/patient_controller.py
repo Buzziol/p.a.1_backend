@@ -84,7 +84,7 @@ class PatientController:
             "pages": pagination.pages,
         }), 200
 
-    @role_required("CLINIC_ADMIN", "DOCTOR")
+    @role_required("CLINIC_ADMIN", "RECEPTIONIST", "DOCTOR")
     def get_patient(self, patient_id):
         actor = User.query.get(int(get_jwt_identity()))
         p = Patient.query.get(patient_id)
