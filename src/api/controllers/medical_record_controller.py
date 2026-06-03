@@ -1,10 +1,116 @@
+from datetime import datetime, timezone
+
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
-from ..models_db.models import MedicalRecord, User, RoleEnum, DoctorProfile, Patient, Clinic, AIAnalysis
+from ..models_db.models import Appointment, MedicalRecord, User, RoleEnum, Patient, Clinic, AIAnalysis
+from ..services.clinic_scope import (
+    doctor_can_access_medical_record,
+    doctor_can_access_patient,
+    doctor_medical_record_access_filter,
+    get_doctor_profile,
+)
 from .ai_controller import serialize_ai_analysis
+
+
+LEGACY_CLINICAL_FIELDS = [
+    "anamnesis",
+    "physical_exam",
+    "diagnostic_hypothesis",
+    "diagnosis",
+    "conduct",
+    "prescriptions",
+    "exams_requested",
+    "evolution",
+]
+
+DERMATOLOGY_FIELDS = [
+    "consultation_type",
+    "consultation_type_other",
+    "chief_complaint",
+    "problem_onset",
+    "clinical_evolution",
+    "associated_symptoms",
+    "symptom_other",
+    "had_previous_treatment",
+    "previous_treatments",
+    "has_skin_cancer_history",
+    "skin_cancer_history_description",
+    "frequent_sun_exposure",
+    "sunscreen_use",
+    "skin_phototype",
+    "lesion_location",
+    "lesion_description",
+    "has_measurable_lesion",
+    "lesion_size",
+    "lesion_size_unit",
+    "lesion_color",
+    "lesion_color_other",
+    "lesion_borders",
+    "lesion_symptoms",
+    "wants_image_attachment",
+    "image_attachment_notes",
+    "has_suspicious_lesion",
+    "asymmetry",
+    "irregular_borders",
+    "varied_color",
+    "diameter_greater_than_6mm",
+    "recent_evolution_change",
+    "suspicion_level",
+    "has_requested_exams",
+    "has_prescription",
+    "needs_follow_up",
+    "suggested_return_date",
+    "return_guidance",
+    "has_referral",
+    "referral_target",
+    "referral_reason",
+    "general_observations",
+]
+
+CLINICAL_UPDATE_FIELDS = LEGACY_CLINICAL_FIELDS + DERMATOLOGY_FIELDS
+
+AUTOMATIC_DERMATOLOGY_FIELDS = [
+    "attendance_datetime",
+    "doctor_name",
+    "doctor_crm",
+    "doctor_signature",
+    "record_datetime",
+]
+
+
+def _iso(value):
+    return value.isoformat() + "Z" if value else None
+
+
+def _parse_date(value, field_name):
+    if value in (None, ""):
+        return None, None
+    try:
+        return datetime.fromisoformat(str(value)).date(), None
+    except (TypeError, ValueError):
+        return None, f"{field_name} deve estar no formato ISO YYYY-MM-DD"
+
+
+def _apply_clinical_fields(record, data):
+    for field in CLINICAL_UPDATE_FIELDS:
+        if field not in data:
+            continue
+        value = data[field]
+        if field == "suggested_return_date":
+            value, error = _parse_date(value, field)
+            if error:
+                return error
+        setattr(record, field, value)
+    return None
+
+
+def _doctor_signature(actor, doctor_profile):
+    if not actor or not doctor_profile:
+        return None
+    return f"{actor.name} - CRM {doctor_profile.crm}"
 
 
 def _resolve_clinic_id(actor, data=None):
@@ -18,11 +124,33 @@ def _resolve_clinic_id(actor, data=None):
     return clinic.id if clinic else None
 
 
+def _serialize_medical_record(mr, patient=None, analyses=None):
+    payload = {
+        "id": mr.id,
+        "clinic_id": mr.clinic_id,
+        "patient_id": mr.patient_id,
+        "patient_name": patient.name if patient else "â€”",
+        "doctor_profile_id": mr.doctor_profile_id,
+        "appointment_id": mr.appointment_id,
+        "created_at": _iso(mr.created_at),
+        "updated_at": _iso(mr.updated_at),
+    }
+    for field in LEGACY_CLINICAL_FIELDS + AUTOMATIC_DERMATOLOGY_FIELDS + DERMATOLOGY_FIELDS:
+        value = getattr(mr, field)
+        if field in ("attendance_datetime", "record_datetime"):
+            value = _iso(value)
+        elif field == "suggested_return_date":
+            value = value.isoformat() if value else None
+        payload[field] = value
+    payload["ai_analyses"] = [serialize_ai_analysis(analysis) for analysis in analyses] if analyses else []
+    return payload
+
+
 class MedicalRecordController:
     @role_required("DOCTOR")
     def create(self):
         actor = User.query.get(int(get_jwt_identity()))
-        dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+        dp = get_doctor_profile(actor)
         if not dp:
             return jsonify({"error": "Doctor profile não encontrado"}), 400
         data = get_json_body()
@@ -34,20 +162,29 @@ class MedicalRecordController:
         clinic_id = _resolve_clinic_id(actor, data)
         if not clinic_id:
             return jsonify({"error": "Nenhuma clínica disponível"}), 400
+        appointment = Appointment.query.get(data["appointment_id"])
+        if (
+            not appointment
+            or appointment.clinic_id != clinic_id
+            or appointment.doctor_profile_id != dp.id
+            or appointment.patient_id != data["patient_id"]
+        ):
+            return jsonify({"error": "Consulta nÃ£o encontrada para este mÃ©dico e paciente"}), 404
+        now = datetime.now(timezone.utc)
         mr = MedicalRecord(
             clinic_id=clinic_id,
-            patient_id=data["patient_id"],
+            patient_id=appointment.patient_id,
             doctor_profile_id=dp.id,
-            appointment_id=data["appointment_id"],
-            anamnesis=data.get("anamnesis", ""),
-            physical_exam=data.get("physical_exam", ""),
-            diagnostic_hypothesis=data.get("diagnostic_hypothesis", ""),
-            diagnosis=data.get("diagnosis", ""),
-            conduct=data.get("conduct", ""),
-            prescriptions=data.get("prescriptions", ""),
-            exams_requested=data.get("exams_requested", ""),
-            evolution=data.get("evolution", ""),
+            appointment_id=appointment.id,
+            attendance_datetime=appointment.scheduled_at,
+            doctor_name=actor.name,
+            doctor_crm=dp.crm,
+            doctor_signature=_doctor_signature(actor, dp),
+            record_datetime=now,
         )
+        error = _apply_clinical_fields(mr, data)
+        if error:
+            return jsonify({"error": error}), 400
         db.session.add(mr)
         db.session.commit()
         return jsonify({"id": mr.id}), 201
@@ -59,10 +196,10 @@ class MedicalRecordController:
         if actor.clinic_id is not None:
             q = q.filter_by(clinic_id=actor.clinic_id)
         if actor.role == RoleEnum.DOCTOR:
-            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+            dp = get_doctor_profile(actor)
             if not dp:
                 return jsonify({"items": [], "total": 0}), 200
-            q = q.filter_by(doctor_profile_id=dp.id)
+            q = q.filter(doctor_medical_record_access_filter(actor))
         patient_id = request.args.get("patient_id", type=int)
         if patient_id:
             q = q.filter_by(patient_id=patient_id)
@@ -86,15 +223,17 @@ class MedicalRecordController:
         patient = Patient.query.get(patient_id)
         if not patient or (actor.role != RoleEnum.SUPER_ADMIN and patient.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
+        if actor.role == RoleEnum.DOCTOR and not doctor_can_access_patient(actor, patient):
+            return jsonify({"error": "Not found"}), 404
 
         q = MedicalRecord.query.filter_by(patient_id=patient_id)
         if actor.role != RoleEnum.SUPER_ADMIN:
             q = q.filter_by(clinic_id=actor.clinic_id)
         if actor.role == RoleEnum.DOCTOR:
-            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+            dp = get_doctor_profile(actor)
             if not dp:
                 return jsonify([]), 200
-            q = q.filter_by(doctor_profile_id=dp.id)
+            q = q.filter(doctor_medical_record_access_filter(actor))
 
         records = q.order_by(MedicalRecord.id.desc()).all()
         return jsonify([{
@@ -112,10 +251,8 @@ class MedicalRecordController:
         mr = MedicalRecord.query.get(record_id)
         if not mr or (actor.role != RoleEnum.SUPER_ADMIN and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
-        if actor.role == RoleEnum.DOCTOR:
-            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
-            if not dp or mr.doctor_profile_id != dp.id:
-                return jsonify({"error": "Forbidden"}), 403
+        if actor.role == RoleEnum.DOCTOR and not doctor_can_access_medical_record(actor, mr):
+            return jsonify({"error": "Forbidden"}), 403
         patient = Patient.query.get(mr.patient_id)
         analyses = (
             AIAnalysis.query
@@ -123,24 +260,7 @@ class MedicalRecordController:
             .order_by(AIAnalysis.created_at.desc(), AIAnalysis.id.desc())
             .all()
         )
-        return jsonify({
-            "id": mr.id,
-            "clinic_id": mr.clinic_id,
-            "patient_id": mr.patient_id,
-            "patient_name": patient.name if patient else "—",
-            "doctor_profile_id": mr.doctor_profile_id,
-            "appointment_id": mr.appointment_id,
-            "anamnesis": mr.anamnesis,
-            "physical_exam": mr.physical_exam,
-            "diagnostic_hypothesis": mr.diagnostic_hypothesis,
-            "diagnosis": mr.diagnosis,
-            "conduct": mr.conduct,
-            "prescriptions": mr.prescriptions,
-            "exams_requested": mr.exams_requested,
-            "evolution": mr.evolution,
-            "ai_analyses": [serialize_ai_analysis(analysis) for analysis in analyses],
-            "created_at": mr.created_at.isoformat() + "Z" if mr.created_at else None,
-        }), 200
+        return jsonify(_serialize_medical_record(mr, patient=patient, analyses=analyses)), 200
 
     @role_required("DOCTOR", "CLINIC_ADMIN")
     def ai_analyses(self, medical_record_id):
@@ -148,10 +268,8 @@ class MedicalRecordController:
         mr = MedicalRecord.query.get(medical_record_id)
         if not mr or (actor.role != RoleEnum.SUPER_ADMIN and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
-        if actor.role == RoleEnum.DOCTOR:
-            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
-            if not dp or mr.doctor_profile_id != dp.id:
-                return jsonify({"error": "Forbidden"}), 403
+        if actor.role == RoleEnum.DOCTOR and not doctor_can_access_medical_record(actor, mr):
+            return jsonify({"error": "Forbidden"}), 403
 
         analyses = (
             AIAnalysis.query
@@ -161,20 +279,19 @@ class MedicalRecordController:
         )
         return jsonify([serialize_ai_analysis(analysis) for analysis in analyses]), 200
 
-    @role_required("DOCTOR")
+    @role_required("DOCTOR", "CLINIC_ADMIN")
     def update(self, record_id):
         actor = User.query.get(int(get_jwt_identity()))
-        dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
         mr = MedicalRecord.query.get(record_id)
         if not mr or (actor.clinic_id is not None and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
-        if not dp or mr.doctor_profile_id != dp.id:
+        if not doctor_can_access_medical_record(actor, mr):
             return jsonify({"error": "Forbidden"}), 403
         data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
-        for field in ["anamnesis", "physical_exam", "diagnostic_hypothesis", "diagnosis", "conduct", "prescriptions", "exams_requested", "evolution"]:
-            if field in data:
-                setattr(mr, field, data[field])
+        error = _apply_clinical_fields(mr, data)
+        if error:
+            return jsonify({"error": error}), 400
         db.session.commit()
         return jsonify({"id": mr.id}), 200

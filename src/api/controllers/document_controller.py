@@ -4,7 +4,8 @@ from flask_jwt_extended import get_jwt_identity
 from werkzeug.utils import secure_filename
 from ..decorators.auth import role_required
 from ..database.extensions import db
-from ..models_db.models import Document, MedicalRecord, User, RoleEnum, DoctorProfile
+from ..models_db.models import Document, MedicalRecord, User
+from ..services.clinic_scope import doctor_can_access_medical_record, get_doctor_profile
 
 
 class DocumentController:
@@ -13,7 +14,7 @@ class DocumentController:
     @role_required("DOCTOR")
     def upload(self):
         actor = User.query.get(int(get_jwt_identity()))
-        dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+        dp = get_doctor_profile(actor)
         if not dp:
             return jsonify({"error": "Doctor profile não encontrado"}), 400
         if 'file' not in request.files or 'medical_record_id' not in request.form:
@@ -22,7 +23,7 @@ class DocumentController:
         mr = MedicalRecord.query.get(int(request.form['medical_record_id']))
         if not mr or (actor.clinic_id is not None and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Prontuário não encontrado"}), 404
-        if mr.doctor_profile_id != dp.id:
+        if not doctor_can_access_medical_record(actor, mr):
             return jsonify({"error": "Forbidden"}), 403
         self.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
         filename = secure_filename(file.filename)

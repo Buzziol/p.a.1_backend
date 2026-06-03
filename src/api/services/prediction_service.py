@@ -114,9 +114,13 @@ class PredictionService:
             if not self.is_model_loaded():
                 raise ModelNotLoadedException()
 
-            self.logger.info("Iniciando predição...")
-            self.logger.info(f"   - Patient ID: {request.patient_id or 'N/A'}")
-            self.logger.info(f"   - Filename: {request.image_file.filename}")
+            filename = getattr(request.image_file, "filename", "") or ""
+            extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else "none"
+            self.logger.info(
+                "Iniciando predição: patient_id_provided=%s, file_extension=%s",
+                bool(request.patient_id),
+                extension,
+            )
 
             img_array = self.preprocess_image(request.image_file)
 

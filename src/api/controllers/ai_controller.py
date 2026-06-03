@@ -8,10 +8,12 @@ from werkzeug.utils import secure_filename
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
-from ..models_db.models import AIAnalysis, Document, MedicalRecord, User, DoctorProfile, DoctorAgreementEnum, RoleEnum
+from ..models_db.models import AIAnalysis, Document, MedicalRecord, User, DoctorAgreementEnum, RoleEnum
+from ..services.clinic_scope import doctor_can_access_medical_record, get_doctor_profile
 from ..services.prediction_service import PredictionService
 from ..api_config import APIConfig
 from ..models.prediction_request import PredictionRequest
+from ..utils.exceptions import APIException
 
 
 # Singleton para não recarregar o modelo a cada request
@@ -63,12 +65,45 @@ class AIController:
     DISCLAIMER = "Este resultado é apenas uma sugestão baseada em inteligência artificial e não substitui avaliação médica profissional."
     STORAGE_DIR = Path("storage") / "documents"
 
+    def legacy_health(self):
+        service = _get_prediction_service()
+        health = service.health_check()
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "version": "1.0.0",
+            **health,
+        }), 200
+
+    def legacy_predict(self):
+        if "file" not in request.files:
+            return jsonify({"error": "Nenhuma imagem foi fornecida", "code": "VALIDATION_ERROR"}), 400
+
+        pred_req = PredictionRequest(
+            image_file=request.files["file"],
+            patient_id=request.form.get("patient_id"),
+            metadata=request.form.to_dict(),
+        )
+        is_valid, error = pred_req.validate()
+        if not is_valid:
+            return jsonify({"error": error, "code": "VALIDATION_ERROR"}), 400
+
+        try:
+            service = _get_prediction_service()
+            result = service.predict(pred_req)
+            return jsonify(result.to_dict()), 200
+        except APIException as exc:
+            return jsonify({
+                "error": exc.message,
+                "code": exc.code.value if exc.code else "AI_UNAVAILABLE",
+            }), exc.status_code
+
     @role_required("DOCTOR")
     def analyze(self):
         actor = User.query.get(int(get_jwt_identity()))
         if actor.role != RoleEnum.DOCTOR:
             return jsonify({"error": "Forbidden"}), 403
-        dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+        dp = get_doctor_profile(actor)
         if not dp:
             return jsonify({"error": "Doctor profile não encontrado"}), 400
 
@@ -94,7 +129,7 @@ class AIController:
         mr = MedicalRecord.query.get(medical_record_id)
         if not mr or (actor.clinic_id is not None and mr.clinic_id != actor.clinic_id):
             return jsonify({"error": "Prontuário não encontrado"}), 404
-        if mr.doctor_profile_id != dp.id:
+        if not doctor_can_access_medical_record(actor, mr):
             return jsonify({"error": "Forbidden"}), 403
 
         doc = None
@@ -166,12 +201,12 @@ class AIController:
         actor = User.query.get(int(get_jwt_identity()))
         if actor.role != RoleEnum.DOCTOR:
             return jsonify({"error": "Forbidden"}), 403
-        dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+        dp = get_doctor_profile(actor)
         analysis = AIAnalysis.query.get(analysis_id)
         if not analysis or (actor.clinic_id is not None and analysis.clinic_id != actor.clinic_id):
             return jsonify({"error": "Not found"}), 404
         mr = MedicalRecord.query.get(analysis.medical_record_id)
-        if not dp or not mr or mr.doctor_profile_id != dp.id:
+        if not dp or not mr or not doctor_can_access_medical_record(actor, mr):
             return jsonify({"error": "Forbidden"}), 403
         data = get_json_body()
         if not data:

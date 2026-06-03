@@ -52,14 +52,18 @@ class APIConfig:
     LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
     # CORS — restringir em produção
-    CORS_ORIGINS = os.getenv(
+    CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv(
         'CORS_ORIGINS',
         (
             'http://localhost:8080,http://127.0.0.1:8080,'
             'http://localhost:5173,http://127.0.0.1:5173,'
-            'http://localhost:4173'
+            'http://localhost:4173,http://127.0.0.1:4173'
         )
-    ).split(',')
+        ).split(',')
+        if origin.strip()
+    ]
 
     @classmethod
     def validate_config(cls):

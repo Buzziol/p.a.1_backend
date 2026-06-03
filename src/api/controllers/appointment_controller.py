@@ -102,19 +102,24 @@ class AppointmentController:
         db.session.commit()
         return jsonify({"id": ap.id, "status": ap.status.value}), 201
 
-    @role_required("CLINIC_ADMIN", "RECEPTIONIST")
+    @role_required("CLINIC_ADMIN", "RECEPTIONIST", "DOCTOR")
     def list(self):
         actor = User.query.get(int(get_jwt_identity()))
         q = Appointment.query
         if actor.clinic_id is not None:
             q = q.filter_by(clinic_id=actor.clinic_id)
+        if actor.role == RoleEnum.DOCTOR:
+            dp = DoctorProfile.query.filter_by(user_id=actor.id).first()
+            if not dp:
+                return jsonify([]), 200
+            q = q.filter(Appointment.doctor_profile_id == dp.id)
         date_filter = request.args.get("date")
         doctor_id = request.args.get("doctor_id", type=int)
         status = request.args.get("status")
         if date_filter:
             day = datetime.fromisoformat(date_filter)
             q = q.filter(Appointment.scheduled_at >= day, Appointment.scheduled_at < day + timedelta(days=1))
-        if doctor_id:
+        if doctor_id and actor.role != RoleEnum.DOCTOR:
             q = q.filter(Appointment.doctor_profile_id == doctor_id)
         if status:
             try:

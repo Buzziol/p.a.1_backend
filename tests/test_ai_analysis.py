@@ -157,5 +157,57 @@ class TestPredictionRequest(unittest.TestCase):
         self.assertFalse(valid)
 
 
+class TestLegacyAIRoutes(unittest.TestCase):
+
+    def setUp(self):
+        from src.api.app import create_app
+
+        cfg = APIConfig()
+        cfg.DATABASE_URL = "sqlite:///:memory:"
+        self.app = create_app(cfg)
+        self.client = self.app.test_client()
+
+    @patch("src.api.controllers.ai_controller._get_prediction_service")
+    def test_legacy_health_returns_controlled_json(self, get_service):
+        service = MagicMock()
+        service.health_check.return_value = {
+            "model_loaded": False,
+            "model_path": "missing.keras",
+            "model_exists": False,
+        }
+        get_service.return_value = service
+
+        response = self.client.get("/api/v1/health", headers={"Origin": "http://localhost:8080"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "http://localhost:8080")
+        self.assertEqual(response.get_json()["status"], "healthy")
+
+    @patch("src.api.controllers.ai_controller._get_prediction_service")
+    def test_legacy_predict_keeps_existing_contract(self, get_service):
+        service = MagicMock()
+        service.predict.return_value = PredictionResponse(
+            diagnosis="benign",
+            probability=0.2,
+            confidence_level="high",
+            recommendation="Monitore alteracoes.",
+            timestamp="2026-05-29T00:00:00Z",
+            patient_id="PAT001",
+        )
+        get_service.return_value = service
+
+        fake_file = _make_fake_image_file()
+        response = self.client.post(
+            "/api/v1/predict",
+            data={"file": (io.BytesIO(fake_file.read()), fake_file.filename), "patient_id": "PAT001"},
+            content_type="multipart/form-data",
+            headers={"Origin": "http://localhost:8080"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "http://localhost:8080")
+        self.assertEqual(response.get_json()["patient_id"], "PAT001")
+
+
 if __name__ == "__main__":
     unittest.main()
