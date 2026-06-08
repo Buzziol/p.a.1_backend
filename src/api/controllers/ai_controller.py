@@ -38,10 +38,41 @@ def _iso(dt):
     return dt.isoformat() + ("Z" if dt.tzinfo is None else "")
 
 
+def _sort_datetime(value):
+    if not value:
+        return datetime.min
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _analysis_order_key(analysis):
+    return (
+        _sort_datetime(analysis.created_at),
+        analysis.id or 0,
+    )
+
+
+def _record_analysis_number(analysis):
+    if not analysis or not analysis.medical_record_id:
+        return None
+    analyses = (
+        AIAnalysis.query
+        .filter_by(medical_record_id=analysis.medical_record_id)
+        .all()
+    )
+    ordered_ids = [item.id for item in sorted(analyses, key=_analysis_order_key)]
+    try:
+        return ordered_ids.index(analysis.id) + 1
+    except ValueError:
+        return None
+
+
 def serialize_ai_analysis(analysis, include_validation=True):
     data = {
         "id": analysis.id,
         "medical_record_id": analysis.medical_record_id,
+        "record_analysis_number": _record_analysis_number(analysis),
         "document_id": analysis.document_id,
         "ai_diagnosis": analysis.ai_diagnosis,
         "probability": round(float(analysis.probability), 4),

@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..models_db.models import Appointment, AppointmentStatus, User, RoleEnum, DoctorProfile, ScheduleBlock, Clinic, Patient
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+from ..utils.date_validation import parse_iso_datetime
 
 
 def _serialize_appointment(a: Appointment) -> dict:
@@ -92,7 +93,9 @@ class AppointmentController:
         clinic_id = _resolve_clinic_id(actor, data)
         if not clinic_id:
             return jsonify({"error": "Nenhuma clínica disponível"}), 400
-        dt = datetime.fromisoformat(data["scheduled_at"])
+        dt, error = parse_iso_datetime(data["scheduled_at"], "scheduled_at")
+        if error:
+            return jsonify({"error": error}), 400
         if self._has_conflict(clinic_id, data["doctor_profile_id"], dt):
             return jsonify({"error": "Conflito de agenda"}), 409
         if self._is_blocked(clinic_id, data["doctor_profile_id"], dt):
@@ -117,7 +120,9 @@ class AppointmentController:
         doctor_id = request.args.get("doctor_id", type=int)
         status = request.args.get("status")
         if date_filter:
-            day = datetime.fromisoformat(date_filter)
+            day, error = parse_iso_datetime(date_filter, "date")
+            if error:
+                return jsonify({"error": error}), 400
             q = q.filter(Appointment.scheduled_at >= day, Appointment.scheduled_at < day + timedelta(days=1))
         if doctor_id and actor.role != RoleEnum.DOCTOR:
             q = q.filter(Appointment.doctor_profile_id == doctor_id)
@@ -150,7 +155,9 @@ class AppointmentController:
         date_str = request.args.get("date")
         if not date_str:
             return jsonify({"error": "date é obrigatório (YYYY-MM-DD)"}), 400
-        day = datetime.fromisoformat(date_str)
+        day, error = parse_iso_datetime(date_str, "date")
+        if error:
+            return jsonify({"error": error}), 400
         q = Appointment.query.filter(
             Appointment.doctor_profile_id == dp.id,
             Appointment.scheduled_at >= day,
@@ -193,7 +200,9 @@ class AppointmentController:
         data = get_json_body()
         if not data:
             return jsonify({"error": "Body JSON inválido ou vazio"}), 400
-        dt = datetime.fromisoformat(data.get("scheduled_at"))
+        dt, error = parse_iso_datetime(data.get("scheduled_at"), "scheduled_at")
+        if error:
+            return jsonify({"error": error}), 400
         if self._has_conflict(actor.clinic_id, ap.doctor_profile_id, dt, exclude_id=ap.id):
             return jsonify({"error": "Conflito de agenda"}), 409
         if self._is_blocked(actor.clinic_id, ap.doctor_profile_id, dt):

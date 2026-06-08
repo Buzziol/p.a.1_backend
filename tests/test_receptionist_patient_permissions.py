@@ -379,6 +379,25 @@ def test_patient_health_insurance_valid_until_must_be_iso_date(client, app):
     clinic = _make_clinic("Validation Clinic")
     receptionist = _make_user("validation-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
 
+    invalid_birth_date_response = client.post(
+        "/api/v1/patients",
+        headers=_auth_header(app, receptionist),
+        json={
+            "name": "Invalid Birth Date Patient",
+            "cpf": "91000000009",
+            "address": "Rua Validacao, 9",
+            "cep": "01234567",
+            "phone": "11666666669",
+            "birth_date": "124125-02-26",
+            "blood_type": "B",
+            "email": "invalid-birth-date@test.com",
+            "marital_status": "single",
+        },
+    )
+
+    assert invalid_birth_date_response.status_code == 400
+    assert "ano" in invalid_birth_date_response.get_json()["error"]
+
     response = client.post(
         "/api/v1/patients",
         headers=_auth_header(app, receptionist),
@@ -398,6 +417,26 @@ def test_patient_health_insurance_valid_until_must_be_iso_date(client, app):
 
     assert response.status_code == 400
     assert "health_insurance_valid_until" in response.get_json()["error"]
+
+    invalid_year_response = client.post(
+        "/api/v1/patients",
+        headers=_auth_header(app, receptionist),
+        json={
+            "name": "Invalid Insurance Year Patient",
+            "cpf": "91000000010",
+            "address": "Rua Validacao, 10",
+            "cep": "01234567",
+            "phone": "11666666660",
+            "birth_date": "1992-03-04",
+            "blood_type": "B",
+            "email": "invalid-insurance-year@test.com",
+            "marital_status": "single",
+            "health_insurance_valid_until": "10000-01-01",
+        },
+    )
+
+    assert invalid_year_response.status_code == 400
+    assert "ano" in invalid_year_response.get_json()["error"]
 
     invalid_bool_response = client.post(
         "/api/v1/patients",
@@ -672,6 +711,245 @@ def test_doctor_can_access_record_through_record_or_linked_appointment(client, a
     assert patient_without_link.id not in listed_patient_ids
 
 
+def test_medical_record_and_ai_analysis_contextual_numbers(client, app):
+    clinic = _make_clinic("Contextual Number Clinic")
+    receptionist = _make_user("context-number-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    clinic_admin = _make_user("context-number-admin@test.com", RoleEnum.CLINIC_ADMIN, clinic.id)
+    doctor, profile = _make_doctor("context-number-doctor@test.com", clinic.id)
+    patient_single = _make_patient(clinic.id, "94000000010")
+    patient_multi = _make_patient(clinic.id, "94000000011")
+    patient_other = _make_patient(clinic.id, "94000000012")
+
+    appointments = [
+        Appointment(
+            clinic_id=clinic.id,
+            patient_id=patient_other.id,
+            doctor_profile_id=profile.id,
+            scheduled_at=datetime(2026, 6, 1, 9, 0),
+            status=AppointmentStatus.COMPLETED,
+            created_by=receptionist.id,
+        ),
+        Appointment(
+            clinic_id=clinic.id,
+            patient_id=patient_single.id,
+            doctor_profile_id=profile.id,
+            scheduled_at=datetime(2026, 6, 2, 9, 0),
+            status=AppointmentStatus.COMPLETED,
+            created_by=receptionist.id,
+        ),
+        Appointment(
+            clinic_id=clinic.id,
+            patient_id=patient_multi.id,
+            doctor_profile_id=profile.id,
+            scheduled_at=datetime(2026, 6, 4, 9, 0),
+            status=AppointmentStatus.COMPLETED,
+            created_by=receptionist.id,
+        ),
+        Appointment(
+            clinic_id=clinic.id,
+            patient_id=patient_multi.id,
+            doctor_profile_id=profile.id,
+            scheduled_at=datetime(2026, 6, 3, 9, 0),
+            status=AppointmentStatus.COMPLETED,
+            created_by=receptionist.id,
+        ),
+    ]
+    _db.session.add_all(appointments)
+    _db.session.flush()
+
+    other_record = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient_other.id,
+        doctor_profile_id=profile.id,
+        appointment_id=appointments[0].id,
+        attendance_datetime=datetime(2026, 6, 1, 9, 0),
+        created_at=datetime(2026, 6, 1, 9, 5),
+        diagnosis="Other patient record",
+    )
+    single_record = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient_single.id,
+        doctor_profile_id=profile.id,
+        appointment_id=appointments[1].id,
+        attendance_datetime=datetime(2026, 6, 2, 9, 0),
+        created_at=datetime(2026, 6, 2, 9, 5),
+        diagnosis="Single patient record",
+    )
+    multi_record_later = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient_multi.id,
+        doctor_profile_id=profile.id,
+        appointment_id=appointments[2].id,
+        attendance_datetime=datetime(2026, 6, 4, 9, 0),
+        created_at=datetime(2026, 6, 4, 9, 5),
+        diagnosis="Second by attendance",
+    )
+    multi_record_earlier = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient_multi.id,
+        doctor_profile_id=profile.id,
+        appointment_id=appointments[3].id,
+        attendance_datetime=datetime(2026, 6, 3, 9, 0),
+        created_at=datetime(2026, 6, 3, 9, 5),
+        diagnosis="First by attendance",
+    )
+    _db.session.add_all([other_record, single_record, multi_record_later, multi_record_earlier])
+    _db.session.flush()
+
+    admin_headers = _auth_header(app, clinic_admin)
+    single_detail = client.get(f"/api/v1/medical-records/{single_record.id}", headers=admin_headers)
+    assert single_detail.status_code == 200
+    assert single_detail.get_json()["id"] != 1
+    assert single_detail.get_json()["patient_record_number"] == 1
+
+    multi_records_response = client.get(
+        f"/api/v1/patients/{patient_multi.id}/medical-records",
+        headers=admin_headers,
+    )
+    assert multi_records_response.status_code == 200
+    multi_numbers = {
+        item["id"]: item["patient_record_number"]
+        for item in multi_records_response.get_json()
+    }
+    assert multi_numbers[multi_record_earlier.id] == 1
+    assert multi_numbers[multi_record_later.id] == 2
+
+    other_detail = client.get(f"/api/v1/medical-records/{other_record.id}", headers=admin_headers)
+    assert other_detail.status_code == 200
+    assert other_detail.get_json()["patient_record_number"] == 1
+
+    records_list_response = client.get(
+        f"/api/v1/medical-records?patient_id={patient_multi.id}",
+        headers=admin_headers,
+    )
+    assert records_list_response.status_code == 200
+    listed_numbers = {
+        item["id"]: item["patient_record_number"]
+        for item in records_list_response.get_json()["items"]
+    }
+    assert listed_numbers[multi_record_earlier.id] == 1
+    assert listed_numbers[multi_record_later.id] == 2
+
+    target_document = Document(
+        clinic_id=clinic.id,
+        medical_record_id=multi_record_earlier.id,
+        file_path="storage/documents/context-target.jpg",
+        file_type="image/jpeg",
+    )
+    other_document = Document(
+        clinic_id=clinic.id,
+        medical_record_id=other_record.id,
+        file_path="storage/documents/context-other.jpg",
+        file_type="image/jpeg",
+    )
+    _db.session.add_all([target_document, other_document])
+    _db.session.flush()
+
+    other_analysis = AIAnalysis(
+        clinic_id=clinic.id,
+        medical_record_id=other_record.id,
+        document_id=other_document.id,
+        ai_diagnosis="benign",
+        probability=0.1,
+        confidence_level="high",
+        recommendation="Other record recommendation.",
+        model_version="test",
+        disclaimer="Test disclaimer.",
+        created_at=datetime(2026, 6, 3, 7, 0),
+    )
+    middle_analysis = AIAnalysis(
+        clinic_id=clinic.id,
+        medical_record_id=multi_record_earlier.id,
+        document_id=target_document.id,
+        ai_diagnosis="benign",
+        probability=0.2,
+        confidence_level="high",
+        recommendation="Second contextual recommendation.",
+        model_version="test",
+        disclaimer="Test disclaimer.",
+        created_at=datetime(2026, 6, 3, 9, 30),
+    )
+    first_analysis = AIAnalysis(
+        clinic_id=clinic.id,
+        medical_record_id=multi_record_earlier.id,
+        document_id=target_document.id,
+        ai_diagnosis="benign",
+        probability=0.1,
+        confidence_level="high",
+        recommendation="First contextual recommendation.",
+        model_version="test",
+        disclaimer="Test disclaimer.",
+        created_at=datetime(2026, 6, 3, 9, 15),
+    )
+    last_analysis = AIAnalysis(
+        clinic_id=clinic.id,
+        medical_record_id=multi_record_earlier.id,
+        document_id=target_document.id,
+        ai_diagnosis="malignant",
+        probability=0.8,
+        confidence_level="high",
+        recommendation="Third contextual recommendation.",
+        model_version="test",
+        disclaimer="Test disclaimer.",
+        created_at=datetime(2026, 6, 3, 9, 45),
+    )
+    _db.session.add_all([other_analysis, middle_analysis, first_analysis, last_analysis])
+    _db.session.flush()
+
+    analysis_list_response = client.get(
+        f"/api/v1/medical-records/{multi_record_earlier.id}/ai-analyses",
+        headers=admin_headers,
+    )
+    assert analysis_list_response.status_code == 200
+    analysis_payload = analysis_list_response.get_json()
+    assert [item["id"] for item in analysis_payload] == [
+        first_analysis.id,
+        middle_analysis.id,
+        last_analysis.id,
+    ]
+    assert [item["record_analysis_number"] for item in analysis_payload] == [1, 2, 3]
+    assert other_detail.get_json()["ai_analyses"] == []
+
+    detail_with_analyses = client.get(f"/api/v1/medical-records/{multi_record_earlier.id}", headers=admin_headers)
+    assert detail_with_analyses.status_code == 200
+    embedded_numbers = [
+        item["record_analysis_number"]
+        for item in detail_with_analyses.get_json()["ai_analyses"]
+    ]
+    assert embedded_numbers == [1, 2, 3]
+
+    doctor_validate_response = client.put(
+        f"/api/v1/ai/{middle_analysis.id}/validate",
+        headers=_auth_header(app, doctor),
+        json={"doctor_agreement": "YES", "doctor_final_assessment": "Agree."},
+    )
+    assert doctor_validate_response.status_code == 200
+    assert doctor_validate_response.get_json()["record_analysis_number"] == 2
+
+    other_analysis_list = client.get(
+        f"/api/v1/medical-records/{other_record.id}/ai-analyses",
+        headers=admin_headers,
+    )
+    assert other_analysis_list.status_code == 200
+    assert other_analysis_list.get_json()[0]["record_analysis_number"] == 1
+
+    for analysis in [other_analysis, middle_analysis, first_analysis, last_analysis]:
+        _db.session.delete(analysis)
+    for document in [target_document, other_document]:
+        _db.session.delete(document)
+    for record in [other_record, single_record, multi_record_later, multi_record_earlier]:
+        _db.session.delete(record)
+    for appointment in appointments:
+        _db.session.delete(appointment)
+    for patient in [patient_single, patient_multi, patient_other]:
+        _db.session.delete(patient)
+    _db.session.delete(profile)
+    for user in [receptionist, clinic_admin, doctor]:
+        _db.session.delete(user)
+    _db.session.delete(clinic)
+    _db.session.commit()
+
+
 def test_appointments_list_supports_cors_and_role_scoping(client, app):
     clinic = _make_clinic("Appointment CORS Clinic")
     other_clinic = _make_clinic("Other Appointment CORS Clinic")
@@ -743,6 +1021,78 @@ def test_appointments_list_supports_cors_and_role_scoping(client, app):
         assert {item["id"] for item in response.get_json()} == expected_ids
 
 
+def test_appointment_and_schedule_block_reject_invalid_years(client, app):
+    clinic = _make_clinic("Date Validation Clinic")
+    receptionist = _make_user("date-validation-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    clinic_admin = _make_user("date-validation-admin@test.com", RoleEnum.CLINIC_ADMIN, clinic.id)
+    doctor, profile = _make_doctor("date-validation-doctor@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "93000000004")
+
+    invalid_appointment_response = client.post(
+        "/api/v1/appointments",
+        headers=_auth_header(app, receptionist),
+        json={
+            "patient_id": patient.id,
+            "doctor_profile_id": profile.id,
+            "scheduled_at": "20266-06-08T14:00",
+        },
+    )
+
+    assert invalid_appointment_response.status_code == 400
+    assert "ano" in invalid_appointment_response.get_json()["error"]
+
+    valid_appointment_response = client.post(
+        "/api/v1/appointments",
+        headers=_auth_header(app, receptionist),
+        json={
+            "patient_id": patient.id,
+            "doctor_profile_id": profile.id,
+            "scheduled_at": "2026-06-08 14:00:00",
+        },
+    )
+
+    assert valid_appointment_response.status_code == 201
+
+    invalid_start_response = client.post(
+        "/api/v1/schedule-blocks",
+        headers=_auth_header(app, clinic_admin),
+        json={
+            "doctor_profile_id": profile.id,
+            "start_time": "10000-06-09T09:00",
+            "end_time": "2026-06-09T10:00",
+        },
+    )
+
+    assert invalid_start_response.status_code == 400
+    assert "ano" in invalid_start_response.get_json()["error"]
+
+    invalid_end_response = client.post(
+        "/api/v1/schedule-blocks",
+        headers=_auth_header(app, clinic_admin),
+        json={
+            "doctor_profile_id": profile.id,
+            "start_time": "2026-06-09T09:00",
+            "end_time": "26/02/124125 14:00",
+        },
+    )
+
+    assert invalid_end_response.status_code == 400
+    assert "ano" in invalid_end_response.get_json()["error"]
+
+    valid_block_response = client.post(
+        "/api/v1/schedule-blocks",
+        headers=_auth_header(app, clinic_admin),
+        json={
+            "doctor_profile_id": profile.id,
+            "start_time": "2026-06-10T09:00",
+            "end_time": "2026-06-10T10:00",
+            "reason": "Valid maintenance window",
+        },
+    )
+
+    assert valid_block_response.status_code == 201
+
+
 def test_doctor_cannot_create_medical_record_for_scheduled_appointment(client, app):
     clinic = _make_clinic("Medical Record Status Clinic")
     receptionist = _make_user("record-status-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
@@ -774,6 +1124,72 @@ def test_doctor_cannot_create_medical_record_for_scheduled_appointment(client, a
         "error": "Não é possível criar prontuário: o paciente não possui consulta em andamento."
     }
     assert MedicalRecord.query.filter_by(appointment_id=appointment.id).first() is None
+
+
+def test_medical_record_suggested_return_date_rejects_invalid_year(client, app):
+    clinic = _make_clinic("Medical Record Date Validation Clinic")
+    receptionist = _make_user("record-date-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    doctor, profile = _make_doctor("record-date-doctor@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "95000000004")
+    invalid_create_appointment = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        scheduled_at=datetime(2026, 6, 11, 9, 0),
+        status=AppointmentStatus.IN_PROGRESS,
+        created_by=receptionist.id,
+    )
+    valid_create_appointment = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        scheduled_at=datetime(2026, 6, 11, 10, 0),
+        status=AppointmentStatus.IN_PROGRESS,
+        created_by=receptionist.id,
+    )
+    _db.session.add_all([invalid_create_appointment, valid_create_appointment])
+    _db.session.flush()
+
+    headers = _auth_header(app, doctor)
+    invalid_create_response = client.post(
+        "/api/v1/medical-records",
+        headers=headers,
+        json={
+            "patient_id": patient.id,
+            "appointment_id": invalid_create_appointment.id,
+            "suggested_return_date": "20266-07-10",
+        },
+    )
+
+    assert invalid_create_response.status_code == 400
+    assert "ano" in invalid_create_response.get_json()["error"]
+    assert MedicalRecord.query.filter_by(appointment_id=invalid_create_appointment.id).first() is None
+
+    valid_create_response = client.post(
+        "/api/v1/medical-records",
+        headers=headers,
+        json={
+            "patient_id": patient.id,
+            "appointment_id": valid_create_appointment.id,
+            "suggested_return_date": "2026-07-10",
+        },
+    )
+
+    assert valid_create_response.status_code == 201
+    record_id = valid_create_response.get_json()["id"]
+
+    invalid_update_response = client.put(
+        f"/api/v1/medical-records/{record_id}",
+        headers=headers,
+        json={"suggested_return_date": "26/02/124125"},
+    )
+
+    assert invalid_update_response.status_code == 400
+    assert "ano" in invalid_update_response.get_json()["error"]
+
+    detail_response = client.get(f"/api/v1/medical-records/{record_id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["suggested_return_date"] == "2026-07-10"
 
 
 def test_medical_record_specific_dermatological_lesion_field_accepts_false_and_null(client, app):

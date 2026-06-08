@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..models_db.models import ScheduleBlock, User, RoleEnum, DoctorProfile, Appointment, AppointmentStatus, Clinic
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+from ..utils.date_validation import parse_iso_datetime
 
 
 def _resolve_clinic_id(actor, data=None):
@@ -58,8 +59,12 @@ class ScheduleBlockController:
         clinic_id = _resolve_clinic_id(actor, data)
         if not clinic_id:
             return jsonify({"error": "Nenhuma clínica disponível"}), 400
-        start = datetime.fromisoformat(data["start_time"])
-        end = datetime.fromisoformat(data["end_time"])
+        start, error = parse_iso_datetime(data.get("start_time"), "start_time")
+        if error:
+            return jsonify({"error": error}), 400
+        end, error = parse_iso_datetime(data.get("end_time"), "end_time")
+        if error:
+            return jsonify({"error": error}), 400
         if end <= start:
             return jsonify({"error": "Intervalo inválido"}), 400
         if self._has_block_overlap(clinic_id, doctor_profile_id, start, end):

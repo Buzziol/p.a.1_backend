@@ -1,10 +1,10 @@
-from datetime import datetime
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..models_db.models import Patient, User, RoleEnum, DoctorProfile, Appointment, Clinic, MedicalRecord
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+from ..utils.date_validation import parse_iso_date
 from ..services.clinic_scope import doctor_can_access_patient, get_doctor_profile
 
 
@@ -136,12 +136,7 @@ def _apply_legacy_address(patient, data):
 
 
 def _parse_optional_date(value, field_name):
-    if value in (None, ""):
-        return None, None
-    try:
-        return datetime.fromisoformat(str(value)).date(), None
-    except (TypeError, ValueError):
-        return None, f"{field_name} deve estar no formato ISO YYYY-MM-DD"
+    return parse_iso_date(value, field_name)
 
 
 def _parse_optional_bool(value, field_name):
@@ -277,6 +272,9 @@ class PatientController:
             return jsonify({"error": "Nenhuma clínica disponível"}), 400
         if Patient.query.filter_by(clinic_id=clinic_id, cpf=data["cpf"]).first():
             return jsonify({"error": "CPF já cadastrado nesta clínica"}), 409
+        birth_date, error = parse_iso_date(data["birth_date"], "birth_date")
+        if error:
+            return jsonify({"error": error}), 400
         patient = Patient(
             clinic_id=clinic_id,
             name=data["name"],
@@ -284,7 +282,7 @@ class PatientController:
             address=address,
             cep=data["cep"],
             phone=data["phone"],
-            birth_date=datetime.fromisoformat(data["birth_date"]).date(),
+            birth_date=birth_date,
             blood_type=data["blood_type"],
             email=data["email"],
             marital_status=data["marital_status"],
@@ -380,7 +378,10 @@ class PatientController:
         _apply_patient_profile_data(p, data)
         _apply_legacy_address(p, data)
         if "birth_date" in data:
-            p.birth_date = datetime.fromisoformat(data["birth_date"]).date()
+            birth_date, error = parse_iso_date(data["birth_date"], "birth_date")
+            if error:
+                return jsonify({"error": error}), 400
+            p.birth_date = birth_date
         error = _apply_health_insurance_data(p, data)
         if error:
             return jsonify({"error": error}), 400

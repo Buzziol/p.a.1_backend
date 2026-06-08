@@ -5,6 +5,7 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
+from ..utils.date_validation import parse_iso_date
 from ..models_db.models import Appointment, AppointmentStatus, MedicalRecord, User, RoleEnum, Patient, Clinic, AIAnalysis
 from ..services.clinic_scope import (
     doctor_can_access_medical_record,
@@ -90,12 +91,7 @@ def _iso(value):
 
 
 def _parse_date(value, field_name):
-    if value in (None, ""):
-        return None, None
-    try:
-        return datetime.fromisoformat(str(value)).date(), None
-    except (TypeError, ValueError):
-        return None, f"{field_name} deve estar no formato ISO YYYY-MM-DD"
+    return parse_iso_date(value, field_name)
 
 
 def _apply_clinical_fields(record, data):
@@ -128,11 +124,40 @@ def _resolve_clinic_id(actor, data=None):
     return clinic.id if clinic else None
 
 
+def _sort_datetime(value):
+    if not value:
+        return datetime.min
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _record_order_key(record):
+    primary_datetime = record.attendance_datetime or record.created_at
+    return (
+        _sort_datetime(primary_datetime),
+        _sort_datetime(record.created_at),
+        record.id or 0,
+    )
+
+
+def _patient_record_number(record):
+    if not record or not record.patient_id:
+        return None
+    records = MedicalRecord.query.filter_by(patient_id=record.patient_id).all()
+    ordered_ids = [item.id for item in sorted(records, key=_record_order_key)]
+    try:
+        return ordered_ids.index(record.id) + 1
+    except ValueError:
+        return None
+
+
 def _serialize_medical_record(mr, patient=None, analyses=None):
     payload = {
         "id": mr.id,
         "clinic_id": mr.clinic_id,
         "patient_id": mr.patient_id,
+        "patient_record_number": _patient_record_number(mr),
         "patient_name": patient.name if patient else "â€”",
         "doctor_profile_id": mr.doctor_profile_id,
         "appointment_id": mr.appointment_id,
@@ -216,6 +241,7 @@ class MedicalRecordController:
             items.append({
                 "id": mr.id,
                 "patient_id": mr.patient_id,
+                "patient_record_number": _patient_record_number(mr),
                 "patient_name": patient.name if patient else "—",
                 "appointment_id": mr.appointment_id,
                 "diagnosis": mr.diagnosis[:80] if mr.diagnosis else "",
@@ -245,6 +271,7 @@ class MedicalRecordController:
         return jsonify([{
             "id": mr.id,
             "patient_id": mr.patient_id,
+            "patient_record_number": _patient_record_number(mr),
             "appointment_id": mr.appointment_id,
             "doctor_profile_id": mr.doctor_profile_id,
             "diagnosis": mr.diagnosis,
@@ -263,7 +290,7 @@ class MedicalRecordController:
         analyses = (
             AIAnalysis.query
             .filter_by(clinic_id=mr.clinic_id, medical_record_id=mr.id)
-            .order_by(AIAnalysis.created_at.desc(), AIAnalysis.id.desc())
+            .order_by(AIAnalysis.created_at.asc(), AIAnalysis.id.asc())
             .all()
         )
         return jsonify(_serialize_medical_record(mr, patient=patient, analyses=analyses)), 200
@@ -280,7 +307,7 @@ class MedicalRecordController:
         analyses = (
             AIAnalysis.query
             .filter_by(clinic_id=mr.clinic_id, medical_record_id=mr.id)
-            .order_by(AIAnalysis.created_at.desc(), AIAnalysis.id.desc())
+            .order_by(AIAnalysis.created_at.asc(), AIAnalysis.id.asc())
             .all()
         )
         return jsonify([serialize_ai_analysis(analysis) for analysis in analyses]), 200
