@@ -86,6 +86,46 @@ def _weekly_appointments(query, target_date):
     ]
 
 
+def _user_is_active(user):
+    return True if user.is_active is None else bool(user.is_active)
+
+
+def _serialize_user(user):
+    row = {
+        "id": user.id,
+        "clinic_id": user.clinic_id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role.value,
+        "is_active": _user_is_active(user),
+        "doctor_profile_id": None,
+    }
+    if user.role == RoleEnum.DOCTOR:
+        dp = DoctorProfile.query.filter_by(user_id=user.id).first()
+        row["doctor_profile_id"] = dp.id if dp else None
+    return row
+
+
+def _parse_user_is_active(data):
+    if "is_active" in data:
+        value = data.get("is_active")
+    elif "active" in data:
+        value = data.get("active")
+    elif "status" in data:
+        status = str(data.get("status", "")).strip().lower()
+        if status in ("active", "ativo", "true", "1"):
+            return True, None
+        if status in ("inactive", "inativo", "false", "0"):
+            return False, None
+        return None, "status deve ser active/inactive"
+    else:
+        return True, None
+
+    if isinstance(value, bool):
+        return value, None
+    return None, "is_active deve ser boolean"
+
+
 class AdminController:
     @role_required("SUPER_ADMIN")
     def list_clinics(self):
@@ -135,22 +175,7 @@ class AdminController:
         if actor.role in (RoleEnum.CLINIC_ADMIN, RoleEnum.RECEPTIONIST):
             query = query.filter_by(clinic_id=actor.clinic_id)
         users = query.order_by(User.id.asc()).all()
-        result = []
-        for u in users:
-            row = {
-                "id": u.id,
-                "clinic_id": u.clinic_id,
-                "name": u.name,
-                "email": u.email,
-                "role": u.role.value,
-                "is_active": u.is_active,
-                "doctor_profile_id": None,
-            }
-            if u.role == RoleEnum.DOCTOR:
-                dp = DoctorProfile.query.filter_by(user_id=u.id).first()
-                row["doctor_profile_id"] = dp.id if dp else None
-            result.append(row)
-        return jsonify(result), 200
+        return jsonify([_serialize_user(user) for user in users]), 200
 
     @role_required("SUPER_ADMIN", "CLINIC_ADMIN")
     def create_user(self):
@@ -177,13 +202,16 @@ class AdminController:
                 return jsonify({"error": "Forbidden"}), 403
         if role_enum != RoleEnum.SUPER_ADMIN and not clinic_id:
             return jsonify({"error": "clinic_id obrigatório para usuários não SUPER_ADMIN"}), 400
+        is_active, error = _parse_user_is_active(data)
+        if error:
+            return jsonify({"error": error}), 400
 
         user = User(
             name=data["name"],
             email=data["email"],
             role=role_enum,
             clinic_id=clinic_id,
-            is_active=True,
+            is_active=is_active,
         )
         user.set_password(data["password"])
         db.session.add(user)
@@ -208,7 +236,7 @@ class AdminController:
             ip_address=request.remote_addr,
         ))
         db.session.commit()
-        return jsonify({"id": user.id, "email": user.email}), 201
+        return jsonify(_serialize_user(user)), 201
 
     @role_required("SUPER_ADMIN", "CLINIC_ADMIN")
     def list_audit_logs(self):

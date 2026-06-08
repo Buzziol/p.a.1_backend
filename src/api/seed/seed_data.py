@@ -8,6 +8,8 @@ def run_seed():
         super_admin = User(name="Super Admin", email="superadmin@dermato.local", role=RoleEnum.SUPER_ADMIN, clinic_id=None, is_active=True)
         super_admin.set_password("Admin123!")
         db.session.add(super_admin)
+    elif super_admin.is_active is not True:
+        super_admin.is_active = True
 
     clinic = Clinic.query.filter_by(name="Clínica Dermatológica Exemplo").first()
     if not clinic:
@@ -30,5 +32,7 @@ def run_seed():
                 dp = DoctorProfile.query.filter_by(user_id=user.id).first()
                 if not dp:
                     db.session.add(DoctorProfile(user_id=user.id, crm="CRM-TESTE-0001", phone="11999999999"))
+        elif user.is_active is not True:
+            user.is_active = True
 
     db.session.commit()

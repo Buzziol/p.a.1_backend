@@ -6,6 +6,10 @@ from ..models_db.models import User, RefreshToken
 from ..database.extensions import db
 
 
+def _user_is_active(user):
+    return True if user.is_active is None else bool(user.is_active)
+
+
 class AuthController:
     def login(self):
         data = request.get_json(silent=True) or {}
@@ -35,6 +39,7 @@ class AuthController:
                 "email": user.email,
                 "role": user.role.value,
                 "clinic_id": user.clinic_id,
+                "is_active": _user_is_active(user),
             },
             "clinic": {"id": user.clinic_id} if user.clinic_id else None,
         }), 200
@@ -72,6 +77,7 @@ class AuthController:
             "email": user.email,
             "role": user.role.value,
             "clinic_id": user.clinic_id,
+            "is_active": _user_is_active(user),
             "permissions": base_permissions_for_role(user.role),
         }), 200
 
