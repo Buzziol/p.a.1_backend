@@ -196,6 +196,7 @@ class MedicalRecord(TimestampMixin, db.Model):
     frequent_sun_exposure = db.Column(db.Boolean, nullable=True)
     sunscreen_use = db.Column(db.String(64), nullable=True)
     skin_phototype = db.Column(db.String(64), nullable=True)
+    has_specific_dermatological_lesion = db.Column(db.Boolean, nullable=True)
     lesion_location = db.Column(db.Text, nullable=True)
     lesion_description = db.Column(db.Text, nullable=True)
     has_measurable_lesion = db.Column(db.Boolean, nullable=True)
@@ -240,6 +241,7 @@ class Document(db.Model):
     medical_record_id = db.Column(db.Integer, db.ForeignKey("medical_records.id"), nullable=False, index=True)
     file_path = db.Column(db.String(500), nullable=False)
     file_type = db.Column(db.String(100), nullable=False)
+    document_category = db.Column(db.String(32), nullable=False, default="OTHER_DOCUMENT")
     uploaded_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
 
 

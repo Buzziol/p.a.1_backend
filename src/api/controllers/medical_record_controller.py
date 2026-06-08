@@ -5,7 +5,7 @@ from flask_jwt_extended import get_jwt_identity
 from ..decorators.auth import role_required
 from ..database.extensions import db
 from ..utils.request_utils import get_json_body
-from ..models_db.models import Appointment, MedicalRecord, User, RoleEnum, Patient, Clinic, AIAnalysis
+from ..models_db.models import Appointment, AppointmentStatus, MedicalRecord, User, RoleEnum, Patient, Clinic, AIAnalysis
 from ..services.clinic_scope import (
     doctor_can_access_medical_record,
     doctor_can_access_patient,
@@ -41,6 +41,7 @@ DERMATOLOGY_FIELDS = [
     "frequent_sun_exposure",
     "sunscreen_use",
     "skin_phototype",
+    "has_specific_dermatological_lesion",
     "lesion_location",
     "lesion_description",
     "has_measurable_lesion",
@@ -71,6 +72,9 @@ DERMATOLOGY_FIELDS = [
 ]
 
 CLINICAL_UPDATE_FIELDS = LEGACY_CLINICAL_FIELDS + DERMATOLOGY_FIELDS
+NO_APPOINTMENT_IN_PROGRESS_MESSAGE = (
+    "Não é possível criar prontuário: o paciente não possui consulta em andamento."
+)
 
 AUTOMATIC_DERMATOLOGY_FIELDS = [
     "attendance_datetime",
@@ -170,6 +174,8 @@ class MedicalRecordController:
             or appointment.patient_id != data["patient_id"]
         ):
             return jsonify({"error": "Consulta nÃ£o encontrada para este mÃ©dico e paciente"}), 404
+        if appointment.status != AppointmentStatus.IN_PROGRESS:
+            return jsonify({"error": NO_APPOINTMENT_IN_PROGRESS_MESSAGE}), 409
         now = datetime.now(timezone.utc)
         mr = MedicalRecord(
             clinic_id=clinic_id,

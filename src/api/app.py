@@ -31,7 +31,7 @@ def create_app(config: APIConfig = None) -> Flask:
         config = APIConfig()
         config.validate_config()
 
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=None)
     app.config['MAX_CONTENT_LENGTH'] = config.MAX_FILE_SIZE
     app.config['SECRET_KEY'] = config.SECRET_KEY
     app.config['JWT_SECRET_KEY'] = config.JWT_SECRET_KEY
@@ -1075,13 +1075,17 @@ def create_app(config: APIConfig = None) -> Flask:
               required: [patient_id, appointment_id]
               properties:
                 patient_id: {type: integer}
-                appointment_id: {type: integer}
+                appointment_id:
+                  type: integer
+                  description: ID da consulta do paciente; a consulta deve estar com status IN_PROGRESS.
                 anamnesis: {type: string}
                 physical_exam: {type: string}
                 diagnostic_hypothesis: {type: string}
                 diagnosis: {type: string}
                 conduct: {type: string}
-                prescriptions: {type: string}
+                prescriptions:
+                  type: string
+                  description: Receituario / Prescricoes e orientacoes.
                 exams_requested: {type: string}
                 evolution: {type: string}
                 consultation_type: {type: string, enum: [Primeira consulta, Retorno, AvaliaÃ§Ã£o de lesÃ£o, Procedimento, Acompanhamento, Outro]}
@@ -1098,6 +1102,7 @@ def create_app(config: APIConfig = None) -> Flask:
                 frequent_sun_exposure: {type: boolean}
                 sunscreen_use: {type: string}
                 skin_phototype: {type: string}
+                has_specific_dermatological_lesion: {type: boolean}
                 lesion_location: {type: string}
                 lesion_description: {type: string}
                 has_measurable_lesion: {type: boolean}
@@ -1136,6 +1141,14 @@ def create_app(config: APIConfig = None) -> Flask:
             description: Dados inválidos
           403:
             description: Acesso negado (somente DOCTOR)
+          409:
+            description: Consulta nao esta em andamento; prontuario nao pode ser criado
+            schema:
+              type: object
+              properties:
+                error:
+                  type: string
+                  example: Nao e possivel criar prontuario: o paciente nao possui consulta em andamento.
         """
         return medical_record_controller.create()
 
@@ -1187,7 +1200,9 @@ def create_app(config: APIConfig = None) -> Flask:
                 diagnostic_hypothesis: {type: string}
                 diagnosis: {type: string}
                 conduct: {type: string}
-                prescriptions: {type: string}
+                prescriptions:
+                  type: string
+                  description: Receituario / Prescricoes e orientacoes.
                 exams_requested: {type: string}
                 evolution: {type: string}
                 attendance_datetime: {type: string, format: date-time}
@@ -1207,6 +1222,7 @@ def create_app(config: APIConfig = None) -> Flask:
                 frequent_sun_exposure: {type: boolean}
                 sunscreen_use: {type: string}
                 skin_phototype: {type: string}
+                has_specific_dermatological_lesion: {type: boolean}
                 lesion_location: {type: string}
                 lesion_description: {type: string}
                 has_measurable_lesion: {type: boolean}
@@ -1317,7 +1333,9 @@ def create_app(config: APIConfig = None) -> Flask:
                 diagnostic_hypothesis: {type: string}
                 diagnosis: {type: string}
                 conduct: {type: string}
-                prescriptions: {type: string}
+                prescriptions:
+                  type: string
+                  description: Receituario / Prescricoes e orientacoes.
                 exams_requested: {type: string}
                 evolution: {type: string}
                 consultation_type: {type: string}
@@ -1334,6 +1352,7 @@ def create_app(config: APIConfig = None) -> Flask:
                 frequent_sun_exposure: {type: boolean}
                 sunscreen_use: {type: string}
                 skin_phototype: {type: string}
+                has_specific_dermatological_lesion: {type: boolean}
                 lesion_location: {type: string}
                 lesion_description: {type: string}
                 has_measurable_lesion: {type: boolean}
@@ -1392,20 +1411,134 @@ def create_app(config: APIConfig = None) -> Flask:
             name: file
             type: file
             required: true
-            description: Imagem ou documento (PNG, JPG, JPEG; máx 10MB)
+            description: Arquivo comum vinculado ao prontuario (PDF, imagem, TXT, DOCX etc.; max 10MB)
           - in: formData
             name: medical_record_id
             type: integer
             required: true
+            description: ID do prontuario que recebera o documento. Limite de 99 documentos por prontuario.
+          - in: formData
+            name: document_category
+            type: string
+            enum: [LESION_IMAGE, OTHER_DOCUMENT]
+            required: false
+            description: Categoria/origem do documento. Default OTHER_DOCUMENT.
         responses:
           201:
             description: Documento enviado com sucesso
+            schema:
+              type: object
+              properties:
+                id: {type: integer}
+                medical_record_id: {type: integer}
+                file_name: {type: string}
+                file_type: {type: string}
+                document_category: {type: string, enum: [LESION_IMAGE, OTHER_DOCUMENT]}
+                uploaded_at: {type: string, format: date-time}
+                download_url: {type: string}
           400:
             description: Arquivo inválido ou campos ausentes
+          403:
+            description: Acesso negado
+          404:
+            description: Prontuario nao encontrado
+          409:
+            description: Limite de 99 documentos atingido para este prontuario
           413:
             description: Arquivo excede o tamanho máximo
         """
         return document_controller.upload()
+
+    @app.route('/api/v1/medical-records/<int:medical_record_id>/documents', methods=['GET', 'OPTIONS'])
+    def list_medical_record_documents(medical_record_id):
+        """
+        Listar documentos do prontuario (DOCTOR, CLINIC_ADMIN)
+        ---
+        tags:
+          - Documents
+        security:
+          - Bearer: []
+        parameters:
+          - in: path
+            name: medical_record_id
+            type: integer
+            required: true
+        responses:
+          200:
+            description: Lista de documentos vinculados ao prontuario
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: {type: integer}
+                  medical_record_id: {type: integer}
+                  file_name: {type: string}
+                  file_type: {type: string}
+                  document_category: {type: string, enum: [LESION_IMAGE, OTHER_DOCUMENT]}
+                  uploaded_at: {type: string, format: date-time}
+                  download_url: {type: string}
+          403:
+            description: Acesso negado
+          404:
+            description: Prontuario nao encontrado
+        """
+        if request.method == "OPTIONS":
+            return "", 204
+        return document_controller.list_by_medical_record(medical_record_id)
+
+    @app.route('/api/v1/documents/<int:document_id>/download', methods=['GET'])
+    def download_document(document_id):
+        """
+        Baixar documento do prontuario (DOCTOR, CLINIC_ADMIN)
+        ---
+        tags:
+          - Documents
+        security:
+          - Bearer: []
+        parameters:
+          - in: path
+            name: document_id
+            type: integer
+            required: true
+        responses:
+          200:
+            description: Arquivo do documento
+          403:
+            description: Acesso negado
+          404:
+            description: Documento ou arquivo nao encontrado
+        """
+        return document_controller.download(document_id)
+
+    @app.route('/api/v1/documents/<int:document_id>', methods=['DELETE'])
+    def delete_document(document_id):
+        """
+        Excluir documento do prontuario (DOCTOR, CLINIC_ADMIN)
+        ---
+        tags:
+          - Documents
+        description: Exclui o registro do documento no banco. Arquivo fisico e mantido, seguindo o padrao atual do projeto.
+        security:
+          - Bearer: []
+        parameters:
+          - in: path
+            name: document_id
+            type: integer
+            required: true
+        responses:
+          200:
+            description: Documento excluido
+            schema:
+              type: object
+              properties:
+                id: {type: integer}
+          403:
+            description: Acesso negado
+          404:
+            description: Documento nao encontrado
+        """
+        return document_controller.delete(document_id)
 
     # ── AI ──
     @app.route('/api/v1/ai/analyze', methods=['POST'])

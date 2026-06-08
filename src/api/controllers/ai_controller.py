@@ -14,6 +14,7 @@ from ..services.prediction_service import PredictionService
 from ..api_config import APIConfig
 from ..models.prediction_request import PredictionRequest
 from ..utils.exceptions import APIException
+from .document_controller import MAX_DOCUMENTS_PER_MEDICAL_RECORD
 
 
 # Singleton para não recarregar o modelo a cada request
@@ -148,6 +149,9 @@ class AIController:
                 })()
                 pred_req = PredictionRequest(image_file=wrapped, patient_id=str(mr.patient_id))
             elif 'file' in request.files:
+                current_count = Document.query.filter_by(medical_record_id=mr.id).count()
+                if current_count >= MAX_DOCUMENTS_PER_MEDICAL_RECORD:
+                    return jsonify({"error": "Limite de 99 documentos atingido para este prontuário."}), 409
                 file = request.files['file']
                 # Salvar o arquivo como documento primeiro para persistir a análise
                 self.STORAGE_DIR.mkdir(parents=True, exist_ok=True)

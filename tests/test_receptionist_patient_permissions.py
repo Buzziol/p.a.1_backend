@@ -743,6 +743,97 @@ def test_appointments_list_supports_cors_and_role_scoping(client, app):
         assert {item["id"] for item in response.get_json()} == expected_ids
 
 
+def test_doctor_cannot_create_medical_record_for_scheduled_appointment(client, app):
+    clinic = _make_clinic("Medical Record Status Clinic")
+    receptionist = _make_user("record-status-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    doctor, profile = _make_doctor("record-status-doctor@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "95000000002")
+    appointment = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        scheduled_at=datetime(2026, 6, 4, 10, 0),
+        status=AppointmentStatus.SCHEDULED,
+        created_by=receptionist.id,
+    )
+    _db.session.add(appointment)
+    _db.session.flush()
+
+    response = client.post(
+        "/api/v1/medical-records",
+        headers=_auth_header(app, doctor),
+        json={
+            "patient_id": patient.id,
+            "appointment_id": appointment.id,
+            "diagnosis": "Should not be created",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "Não é possível criar prontuário: o paciente não possui consulta em andamento."
+    }
+    assert MedicalRecord.query.filter_by(appointment_id=appointment.id).first() is None
+
+
+def test_medical_record_specific_dermatological_lesion_field_accepts_false_and_null(client, app):
+    clinic = _make_clinic("Specific Lesion Field Clinic")
+    receptionist = _make_user("specific-lesion-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    doctor, profile = _make_doctor("specific-lesion-doctor@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "95000000003")
+    appointment_with_false = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        scheduled_at=datetime(2026, 6, 4, 11, 0),
+        status=AppointmentStatus.IN_PROGRESS,
+        created_by=receptionist.id,
+    )
+    appointment_without_value = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        scheduled_at=datetime(2026, 6, 4, 12, 0),
+        status=AppointmentStatus.COMPLETED,
+        created_by=receptionist.id,
+    )
+    _db.session.add_all([appointment_with_false, appointment_without_value])
+    _db.session.flush()
+
+    headers = _auth_header(app, doctor)
+    create_response = client.post(
+        "/api/v1/medical-records",
+        headers=headers,
+        json={
+            "patient_id": patient.id,
+            "appointment_id": appointment_with_false.id,
+            "has_specific_dermatological_lesion": False,
+            "chief_complaint": "Rotina dermatologica",
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_record_id = create_response.get_json()["id"]
+    detail_response = client.get(f"/api/v1/medical-records/{created_record_id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["has_specific_dermatological_lesion"] is False
+
+    legacy_record = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        appointment_id=appointment_without_value.id,
+    )
+    _db.session.add(legacy_record)
+    _db.session.flush()
+
+    legacy_detail_response = client.get(f"/api/v1/medical-records/{legacy_record.id}", headers=headers)
+    assert legacy_detail_response.status_code == 200
+    legacy_payload = legacy_detail_response.get_json()
+    assert "has_specific_dermatological_lesion" in legacy_payload
+    assert legacy_payload["has_specific_dermatological_lesion"] is None
+
+
 def test_medical_record_contract_uses_canonical_clinical_fields(client, app):
     clinic = _make_clinic("Medical Record Contract Clinic")
     receptionist = _make_user("record-contract-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
@@ -754,7 +845,7 @@ def test_medical_record_contract_uses_canonical_clinical_fields(client, app):
         patient_id=patient.id,
         doctor_profile_id=profile.id,
         scheduled_at=datetime(2026, 6, 4, 9, 0),
-        status=AppointmentStatus.SCHEDULED,
+        status=AppointmentStatus.IN_PROGRESS,
         created_by=receptionist.id,
     )
     _db.session.add(appointment)
@@ -788,6 +879,7 @@ def test_medical_record_contract_uses_canonical_clinical_fields(client, app):
             "frequent_sun_exposure": True,
             "sunscreen_use": "Irregular",
             "skin_phototype": "III — Morena clara",
+            "has_specific_dermatological_lesion": True,
             "lesion_location": "Dorso",
             "lesion_description": "Papula pigmentada assimetrica",
             "has_measurable_lesion": True,
@@ -833,6 +925,7 @@ def test_medical_record_contract_uses_canonical_clinical_fields(client, app):
     assert detail_payload["consultation_type"] == "Lesion assessment"
     assert detail_payload["chief_complaint"] == "Lesao pigmentada"
     assert detail_payload["associated_symptoms"] == ["Coceira", "Sangramento"]
+    assert detail_payload["has_specific_dermatological_lesion"] is True
     assert detail_payload["has_suspicious_lesion"] is True
     assert detail_payload["irregular_borders"] is True
     assert detail_payload["diameter_greater_than_6mm"] is True
@@ -848,6 +941,7 @@ def test_medical_record_contract_uses_canonical_clinical_fields(client, app):
             "diagnostic_hypothesis": "Seborrheic keratosis",
             "exams_requested": "Biopsy if change occurs",
             "prescriptions": "Moisturizer",
+            "has_specific_dermatological_lesion": False,
             "has_suspicious_lesion": False,
             "asymmetry": False,
             "suspicion_level": "Baixo",
@@ -864,6 +958,7 @@ def test_medical_record_contract_uses_canonical_clinical_fields(client, app):
     assert updated_detail_payload["diagnostic_hypothesis"] == "Seborrheic keratosis"
     assert updated_detail_payload["exams_requested"] == "Biopsy if change occurs"
     assert updated_detail_payload["prescriptions"] == "Moisturizer"
+    assert updated_detail_payload["has_specific_dermatological_lesion"] is False
     assert updated_detail_payload["has_suspicious_lesion"] is False
     assert updated_detail_payload["asymmetry"] is False
     assert updated_detail_payload["suspicion_level"] == "Baixo"
@@ -919,29 +1014,248 @@ def test_receptionist_remains_blocked_from_clinical_resources(client, app):
         patient_id=patient.id,
         doctor_profile_id=doctor_profile.id,
         appointment_id=appointment.id,
+        prescriptions="Sensitive prescription",
     )
     _db.session.add(record)
+    _db.session.flush()
+    document = Document(
+        clinic_id=clinic.id,
+        medical_record_id=record.id,
+        file_path="storage/documents/reception-block.txt",
+        file_type="text/plain",
+    )
+    _db.session.add(document)
+    _db.session.flush()
+    analysis = AIAnalysis(
+        clinic_id=clinic.id,
+        medical_record_id=record.id,
+        document_id=document.id,
+        ai_diagnosis="benign",
+        probability=0.2,
+        confidence_level="high",
+        recommendation="Monitorar.",
+        model_version="test",
+        disclaimer="Test disclaimer.",
+    )
+    _db.session.add(analysis)
     _db.session.flush()
 
     headers = _auth_header(app, receptionist)
 
     responses = [
+        client.post(
+            "/api/v1/medical-records",
+            headers=headers,
+            json={
+                "patient_id": patient.id,
+                "appointment_id": appointment.id,
+                "prescriptions": "Should not be saved",
+            },
+        ),
         client.get(f"/api/v1/patients/{patient.id}/medical-records", headers=headers),
         client.get("/api/v1/medical-records", headers=headers),
         client.get(f"/api/v1/medical-records/{record.id}", headers=headers),
-        client.put(f"/api/v1/medical-records/{record.id}", headers=headers, json={"diagnosis": "Blocked"}),
+        client.put(
+            f"/api/v1/medical-records/{record.id}",
+            headers=headers,
+            json={"diagnosis": "Blocked", "prescriptions": "Blocked prescription"},
+        ),
         client.get(f"/api/v1/medical-records/{record.id}/ai-analyses", headers=headers),
         client.post("/api/v1/ai/analyze", headers=headers, json={"medical_record_id": record.id}),
-        client.put("/api/v1/ai/1/validate", headers=headers, json={"doctor_agreement": "YES"}),
+        client.put(f"/api/v1/ai/{analysis.id}/validate", headers=headers, json={"doctor_agreement": "YES"}),
         client.post(
             "/api/v1/documents/upload",
             headers=headers,
             data={"medical_record_id": str(record.id)},
         ),
+        client.get(f"/api/v1/medical-records/{record.id}/documents", headers=headers),
+        client.get(f"/api/v1/documents/{document.id}/download", headers=headers),
+        client.delete(f"/api/v1/documents/{document.id}", headers=headers),
     ]
 
     assert all(response.status_code == 403 for response in responses)
     assert all(response.is_json for response in responses)
+    assert MedicalRecord.query.filter_by(appointment_id=appointment.id).count() == 1
+    assert MedicalRecord.query.get(record.id).prescriptions == "Sensitive prescription"
+    assert Document.query.get(document.id) is not None
+
+    patient_response = client.get(f"/api/v1/patients/{patient.id}", headers=headers)
+    assert patient_response.status_code == 200
+    patient_payload = patient_response.get_json()
+    assert "medical_records" not in patient_payload
+    assert "ai_analyses" not in patient_payload
+    assert "documents" not in patient_payload
+    assert "prescriptions" not in patient_payload
+
+
+def test_medical_record_documents_upload_list_download_delete_and_limit(client, app):
+    clinic = _make_clinic("Document Flow Clinic")
+    receptionist = _make_user("document-flow-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    doctor, doctor_profile = _make_doctor("document-flow-doctor@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "91000000009")
+    appointment = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=doctor_profile.id,
+        scheduled_at=datetime(2026, 6, 6, 9, 0),
+        status=AppointmentStatus.IN_PROGRESS,
+        created_by=receptionist.id,
+    )
+    _db.session.add(appointment)
+    _db.session.flush()
+    record = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=doctor_profile.id,
+        appointment_id=appointment.id,
+    )
+    _db.session.add(record)
+    _db.session.flush()
+
+    headers = _auth_header(app, doctor)
+
+    uploads = [
+        ("laudo.pdf", b"%PDF-1.4 fake", "application/pdf", None, "OTHER_DOCUMENT"),
+        ("lesion.jpg", b"fake image", "image/jpeg", "LESION_IMAGE", "LESION_IMAGE"),
+        ("observacoes.txt", b"texto clinico", "text/plain", "OTHER_DOCUMENT", "OTHER_DOCUMENT"),
+    ]
+    created_ids = []
+    for filename, content, mime_type, category, expected_category in uploads:
+        data = {
+            "medical_record_id": str(record.id),
+            "file": (io.BytesIO(content), filename),
+        }
+        if category:
+            data["document_category"] = category
+        response = client.post(
+            "/api/v1/documents/upload",
+            headers=headers,
+            data=data,
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 201
+        payload = response.get_json()
+        assert payload["medical_record_id"] == record.id
+        assert payload["file_type"] == mime_type
+        assert payload["document_category"] == expected_category
+        assert payload["download_url"] == f"/api/v1/documents/{payload['id']}/download"
+        assert "file_path" not in payload
+        created_ids.append(payload["id"])
+
+    invalid_category_response = client.post(
+        "/api/v1/documents/upload",
+        headers=headers,
+        data={
+            "medical_record_id": str(record.id),
+            "document_category": "INVALID_CATEGORY",
+            "file": (io.BytesIO(b"invalid"), "invalid.txt"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert invalid_category_response.status_code == 400
+    assert invalid_category_response.get_json()["allowed_values"] == ["LESION_IMAGE", "OTHER_DOCUMENT"]
+
+    list_response = client.get(f"/api/v1/medical-records/{record.id}/documents", headers=headers)
+    assert list_response.status_code == 200
+    list_payload = list_response.get_json()
+    assert {item["id"] for item in list_payload} == set(created_ids)
+    listed_categories = {item["id"]: item["document_category"] for item in list_payload}
+    assert listed_categories[created_ids[0]] == "OTHER_DOCUMENT"
+    assert listed_categories[created_ids[1]] == "LESION_IMAGE"
+    assert listed_categories[created_ids[2]] == "OTHER_DOCUMENT"
+    assert all("download_url" in item for item in list_payload)
+    assert all("file_path" not in item for item in list_payload)
+
+    download_response = client.get(f"/api/v1/documents/{created_ids[0]}/download", headers=headers)
+    assert download_response.status_code == 200
+    assert download_response.data == b"%PDF-1.4 fake"
+    assert "storage" not in download_response.headers.get("Content-Disposition", "")
+
+    delete_response = client.delete(f"/api/v1/documents/{created_ids[0]}", headers=headers)
+    assert delete_response.status_code == 200
+    assert Document.query.get(created_ids[0]) is None
+
+    after_delete = client.get(f"/api/v1/medical-records/{record.id}/documents", headers=headers)
+    assert {item["id"] for item in after_delete.get_json()} == set(created_ids[1:])
+
+    for index in range(97):
+        _db.session.add(
+            Document(
+                clinic_id=clinic.id,
+                medical_record_id=record.id,
+                file_path=f"storage/documents/limit-{index}.txt",
+                file_type="text/plain",
+                document_category="OTHER_DOCUMENT",
+            )
+        )
+    _db.session.flush()
+
+    limit_response = client.post(
+        "/api/v1/documents/upload",
+        headers=headers,
+        data={
+            "medical_record_id": str(record.id),
+            "file": (io.BytesIO(b"overflow"), "overflow.txt"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert limit_response.status_code == 409
+    assert limit_response.get_json() == {
+        "error": "Limite de 99 documentos atingido para este prontuário."
+    }
+
+
+def test_doctor_cannot_manage_documents_from_unlinked_medical_record(client, app):
+    clinic = _make_clinic("Document Scope Clinic")
+    receptionist = _make_user("document-scope-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    doctor_a, profile_a = _make_doctor("document-scope-doctor-a@test.com", clinic.id)
+    doctor_b, profile_b = _make_doctor("document-scope-doctor-b@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "91000000010")
+    appointment = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile_a.id,
+        scheduled_at=datetime(2026, 6, 7, 9, 0),
+        status=AppointmentStatus.IN_PROGRESS,
+        created_by=receptionist.id,
+    )
+    _db.session.add(appointment)
+    _db.session.flush()
+    record = MedicalRecord(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile_a.id,
+        appointment_id=appointment.id,
+    )
+    _db.session.add(record)
+    _db.session.flush()
+    document = Document(
+        clinic_id=clinic.id,
+        medical_record_id=record.id,
+        file_path="storage/documents/scope.txt",
+        file_type="text/plain",
+    )
+    _db.session.add(document)
+    _db.session.flush()
+
+    headers = _auth_header(app, doctor_b)
+    responses = [
+        client.post(
+            "/api/v1/documents/upload",
+            headers=headers,
+            data={
+                "medical_record_id": str(record.id),
+                "file": (io.BytesIO(b"blocked"), "blocked.txt"),
+            },
+            content_type="multipart/form-data",
+        ),
+        client.get(f"/api/v1/medical-records/{record.id}/documents", headers=headers),
+        client.get(f"/api/v1/documents/{document.id}/download", headers=headers),
+        client.delete(f"/api/v1/documents/{document.id}", headers=headers),
+    ]
+
+    assert [response.status_code for response in responses] == [403, 403, 403, 403]
+    assert Document.query.get(document.id) is not None
 
 
 def test_clear_clinical_data_cli_is_confirmed_and_preserves_registration_data(app, monkeypatch):
