@@ -473,6 +473,8 @@ flask seed
 - `POST /api/v1/predict` (legado preservado)
 
 ### Novos endpoints (Patients/Appointments/Schedule Blocks)
+
+As regras atuais da agenda, disponibilidade semanal e fila persistente estão documentadas em `src/api/docs/scheduling.md`.
 - `POST /api/v1/patients`
 - `GET /api/v1/patients`
 - `GET /api/v1/patients/{id}`

@@ -1,5 +1,5 @@
 import io
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 import sys
 
@@ -18,6 +18,7 @@ from src.api.models_db.models import (
     Clinic,
     Document,
     DoctorProfile,
+    DoctorAvailability,
     MedicalRecord,
     Patient,
     RoleEnum,
@@ -1041,6 +1042,16 @@ def test_appointment_and_schedule_block_reject_invalid_years(client, app):
     assert invalid_appointment_response.status_code == 400
     assert "ano" in invalid_appointment_response.get_json()["error"]
 
+    _db.session.add(DoctorAvailability(
+        clinic_id=clinic.id,
+        doctor_profile_id=profile.id,
+        weekday=1,
+        start_time=time(8, 0),
+        end_time=time(18, 0),
+        created_by=clinic_admin.id,
+    ))
+    _db.session.flush()
+
     valid_appointment_response = client.post(
         "/api/v1/appointments",
         headers=_auth_header(app, receptionist),
@@ -1048,6 +1059,7 @@ def test_appointment_and_schedule_block_reject_invalid_years(client, app):
             "patient_id": patient.id,
             "doctor_profile_id": profile.id,
             "scheduled_at": "2026-06-08 14:00:00",
+            "duration_minutes": 30,
         },
     )
 

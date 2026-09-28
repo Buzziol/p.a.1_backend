@@ -148,9 +148,14 @@ class Appointment(TimestampMixin, db.Model):
     patient_id = db.Column(db.Integer, db.ForeignKey("patients.id"), nullable=False, index=True)
     doctor_profile_id = db.Column(db.Integer, db.ForeignKey("doctor_profiles.id"), nullable=False, index=True)
     scheduled_at = db.Column(db.DateTime, nullable=False, index=True)
+    duration_minutes = db.Column(db.Integer, nullable=False, default=30, server_default="30")
     status = db.Column(db.Enum(AppointmentStatus), nullable=False, default=AppointmentStatus.SCHEDULED)
     notes = db.Column(db.Text, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+
+    __table_args__ = (
+        db.CheckConstraint("duration_minutes IN (30, 60)", name="ck_appointment_duration"),
+    )
 
 
 class ScheduleBlock(db.Model):
@@ -161,7 +166,65 @@ class ScheduleBlock(db.Model):
     start_time = db.Column(db.DateTime, nullable=False)
     end_time = db.Column(db.DateTime, nullable=False)
     reason = db.Column(db.String(255), nullable=True)
+    all_day = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    updated_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint("end_time > start_time", name="ck_schedule_block_interval"),
+        db.Index("ix_schedule_blocks_doctor_interval", "clinic_id", "doctor_profile_id", "start_time", "end_time"),
+    )
+
+
+class DoctorAvailability(TimestampMixin, db.Model):
+    """Weekly recurring availability. Weekdays use ISO 8601 values 1 (Mon) to 7 (Sun)."""
+    __tablename__ = "doctor_availabilities"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    doctor_profile_id = db.Column(db.Integer, db.ForeignKey("doctor_profiles.id"), nullable=False, index=True)
+    weekday = db.Column(db.Integer, nullable=False)
+    start_time = db.Column(db.Time, nullable=False)
+    end_time = db.Column(db.Time, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    updated_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint("weekday >= 1 AND weekday <= 7", name="ck_doctor_availability_weekday"),
+        db.CheckConstraint("end_time > start_time", name="ck_doctor_availability_interval"),
+        db.Index("ix_doctor_availability_lookup", "clinic_id", "doctor_profile_id", "weekday"),
+    )
+
+
+class ReschedulePendingStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+
+
+class ReschedulePending(TimestampMixin, db.Model):
+    __tablename__ = "reschedule_pendings"
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_id = db.Column(db.Integer, db.ForeignKey("clinics.id"), nullable=False, index=True)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), nullable=False, index=True)
+    open_appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"), nullable=True, unique=True)
+    status = db.Column(db.Enum(ReschedulePendingStatus), nullable=False, default=ReschedulePendingStatus.PENDING, index=True)
+    reason = db.Column(db.String(255), nullable=False)
+    source = db.Column(db.String(64), nullable=False)
+    # The human-readable source is retained for the operational queue.  These
+    # two fields identify the concrete rule that originated the pending, which
+    # lets an edited block be reconciled without deleting its history.
+    source_entity_type = db.Column(db.String(64), nullable=True)
+    source_entity_id = db.Column(db.Integer, nullable=True, index=True)
+    originated_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    resolved_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        db.Index("ix_reschedule_pending_clinic_status", "clinic_id", "status"),
+        # Resolved rows clear open_appointment_id. Both supported databases allow
+        # multiple NULLs while enforcing one open pending per appointment.
+    )
 
 
 class MedicalRecord(TimestampMixin, db.Model):

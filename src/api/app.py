@@ -15,6 +15,8 @@ from .controllers.admin_controller import AdminController
 from .controllers.patient_controller import PatientController
 from .controllers.appointment_controller import AppointmentController
 from .controllers.schedule_block_controller import ScheduleBlockController
+from .controllers.doctor_availability_controller import DoctorAvailabilityController
+from .controllers.reschedule_pending_controller import ReschedulePendingController
 from .controllers.medical_record_controller import MedicalRecordController
 from .controllers.document_controller import DocumentController
 from .controllers.ai_controller import AIController
@@ -169,6 +171,8 @@ def create_app(config: APIConfig = None) -> Flask:
     patient_controller = PatientController()
     appointment_controller = AppointmentController()
     schedule_block_controller = ScheduleBlockController()
+    doctor_availability_controller = DoctorAvailabilityController()
+    reschedule_pending_controller = ReschedulePendingController()
     medical_record_controller = MedicalRecordController()
     document_controller = DocumentController()
     ai_controller = AIController()
@@ -827,11 +831,12 @@ def create_app(config: APIConfig = None) -> Flask:
             required: true
             schema:
               type: object
-              required: [patient_id, doctor_profile_id, scheduled_at]
+              required: [patient_id, doctor_profile_id, scheduled_at, duration_minutes]
               properties:
                 patient_id: {type: integer}
                 doctor_profile_id: {type: integer}
                 scheduled_at: {type: string, format: date-time, example: "2026-06-15T10:00:00"}
+                duration_minutes: {type: integer, enum: [30, 60]}
                 notes: {type: string}
         responses:
           201:
@@ -1011,6 +1016,9 @@ def create_app(config: APIConfig = None) -> Flask:
                 start_time: {type: string, format: date-time, example: "2026-06-20T09:00:00"}
                 end_time: {type: string, format: date-time, example: "2026-06-20T12:00:00"}
                 reason: {type: string, example: Congresso médico}
+                all_day: {type: boolean, example: false}
+                start_date: {type: string, format: date, description: Usado com all_day; data final é inclusiva}
+                end_date: {type: string, format: date, description: Usado com all_day; data final é inclusiva}
         responses:
           201:
             description: Bloqueio criado
@@ -1034,6 +1042,11 @@ def create_app(config: APIConfig = None) -> Flask:
         """
         return schedule_block_controller.list()
 
+    @app.route('/api/v1/schedule-blocks/<int:block_id>', methods=['PUT'])
+    def update_schedule_block(block_id):
+        """Editar bloqueio; datas de dia inteiro usam fim inclusivo no payload."""
+        return schedule_block_controller.update(block_id)
+
     @app.route('/api/v1/schedule-blocks/<int:block_id>', methods=['DELETE'])
     def delete_schedule_block(block_id):
         """
@@ -1055,6 +1068,41 @@ def create_app(config: APIConfig = None) -> Flask:
             description: Bloqueio não encontrado
         """
         return schedule_block_controller.delete(block_id)
+
+    # ── Weekly Doctor Availability ──
+    @app.route('/api/v1/doctor-availabilities', methods=['GET'])
+    def list_doctor_availabilities():
+        """Listar faixas semanais (weekday ISO: 1=segunda, 7=domingo)."""
+        return doctor_availability_controller.list()
+
+    @app.route('/api/v1/doctor-availabilities', methods=['POST'])
+    def create_doctor_availability():
+        return doctor_availability_controller.create()
+
+    @app.route('/api/v1/doctor-availabilities/<int:availability_id>', methods=['PUT'])
+    def update_doctor_availability(availability_id):
+        return doctor_availability_controller.update(availability_id)
+
+    @app.route('/api/v1/doctor-availabilities/<int:availability_id>', methods=['DELETE'])
+    def delete_doctor_availability(availability_id):
+        return doctor_availability_controller.delete(availability_id)
+
+    @app.route('/api/v1/doctor-availabilities/slots', methods=['GET'])
+    def available_doctor_slots():
+        return doctor_availability_controller.slots()
+
+    # ── Persistent rescheduling queue ──
+    @app.route('/api/v1/reschedule-pendings', methods=['GET'])
+    def list_reschedule_pendings():
+        return reschedule_pending_controller.list()
+
+    @app.route('/api/v1/reschedule-pendings/count', methods=['GET'])
+    def count_reschedule_pendings():
+        return reschedule_pending_controller.count()
+
+    @app.route('/api/v1/reschedule-pendings/<int:pending_id>/suggestions', methods=['GET'])
+    def reschedule_pending_suggestions(pending_id):
+        return reschedule_pending_controller.suggestions(pending_id)
 
     # ── Medical Records ──
     @app.route('/api/v1/medical-records', methods=['POST'])
@@ -1647,7 +1695,10 @@ def create_app(config: APIConfig = None) -> Flask:
                     f"Operacao recusada: {name}={value} indica ambiente de producao."
                 )
 
-        from .models_db.models import AIAnalysis, Appointment, Document, MedicalRecord, ScheduleBlock
+        from .models_db.models import (
+            AIAnalysis, Appointment, DoctorAvailability, Document, MedicalRecord,
+            ReschedulePending, ScheduleBlock,
+        )
 
         medical_record_ids = db.session.query(MedicalRecord.id)
         counts = {
@@ -1660,6 +1711,8 @@ def create_app(config: APIConfig = None) -> Flask:
             "medical_records": MedicalRecord.query.count(),
             "appointments": Appointment.query.count(),
             "schedule_blocks": ScheduleBlock.query.count(),
+            "doctor_availabilities": DoctorAvailability.query.count(),
+            "reschedule_pendings": ReschedulePending.query.count(),
         }
 
         click.echo("Dados clinicos/agendas encontrados:")
@@ -1678,6 +1731,7 @@ def create_app(config: APIConfig = None) -> Flask:
 
         try:
             deleted = {
+                "reschedule_pendings": ReschedulePending.query.delete(synchronize_session=False),
                 "ai_analyses": AIAnalysis.query.filter(
                     AIAnalysis.medical_record_id.in_(medical_record_ids)
                 ).delete(synchronize_session=False),
@@ -1687,6 +1741,7 @@ def create_app(config: APIConfig = None) -> Flask:
                 "medical_records": MedicalRecord.query.delete(synchronize_session=False),
                 "appointments": Appointment.query.delete(synchronize_session=False),
                 "schedule_blocks": ScheduleBlock.query.delete(synchronize_session=False),
+                "doctor_availabilities": DoctorAvailability.query.delete(synchronize_session=False),
             }
             db.session.commit()
         except Exception as exc:
