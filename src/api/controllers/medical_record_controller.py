@@ -201,6 +201,14 @@ class MedicalRecordController:
             return jsonify({"error": "Consulta nÃ£o encontrada para este mÃ©dico e paciente"}), 404
         if appointment.status != AppointmentStatus.IN_PROGRESS:
             return jsonify({"error": NO_APPOINTMENT_IN_PROGRESS_MESSAGE}), 409
+        existing = MedicalRecord.query.filter_by(
+            clinic_id=clinic_id, appointment_id=appointment.id
+        ).first()
+        if existing:
+            return jsonify({
+                "error": "Já existe um registro para esta consulta.",
+                "record_id": existing.id,
+            }), 409
         now = datetime.now(timezone.utc)
         mr = MedicalRecord(
             clinic_id=clinic_id,

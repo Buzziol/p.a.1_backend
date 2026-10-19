@@ -1138,6 +1138,33 @@ def test_doctor_cannot_create_medical_record_for_scheduled_appointment(client, a
     assert MedicalRecord.query.filter_by(appointment_id=appointment.id).first() is None
 
 
+def test_medical_record_cannot_be_created_twice_for_one_appointment(client, app):
+    clinic = _make_clinic("One record per appointment clinic")
+    receptionist = _make_user("duplicate-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
+    doctor, profile = _make_doctor("duplicate-doctor@test.com", clinic.id)
+    patient = _make_patient(clinic.id, "95000000111")
+    appointment = Appointment(
+        clinic_id=clinic.id,
+        patient_id=patient.id,
+        doctor_profile_id=profile.id,
+        scheduled_at=datetime(2026, 6, 11, 9, 0),
+        status=AppointmentStatus.IN_PROGRESS,
+        created_by=receptionist.id,
+    )
+    _db.session.add(appointment)
+    _db.session.flush()
+
+    headers = _auth_header(app, doctor)
+    payload = {"patient_id": patient.id, "appointment_id": appointment.id}
+    first = client.post("/api/v1/medical-records", headers=headers, json=payload)
+    second = client.post("/api/v1/medical-records", headers=headers, json=payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.get_json()["record_id"] == first.get_json()["id"]
+    assert MedicalRecord.query.filter_by(appointment_id=appointment.id).count() == 1
+
+
 def test_medical_record_suggested_return_date_rejects_invalid_year(client, app):
     clinic = _make_clinic("Medical Record Date Validation Clinic")
     receptionist = _make_user("record-date-reception@test.com", RoleEnum.RECEPTIONIST, clinic.id)
